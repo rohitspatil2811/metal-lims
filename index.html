@@ -1738,53 +1738,40 @@ function renderChemicalTab(s){
   const tests = ensureChemicalTests(s, 4);
   const req = s.chemical.req || {};
   const method = s.chemical.method || {};
+  const resultLabel = (i)=> i===0 ? "Result" : "Result "+i;
   return `
   <div class="panel">
     <div class="panel-title"><span>Chemical composition (wt %)</span>
       <button class="btn small amber" id="chem-add-sample">+ Add sample</button>
     </div>
-    <div class="hint" style="margin-bottom:10px;">For a batch test, add at least 4 samples — they'll line up as columns below, with Requirement in the last column. This same table prints on the report.</div>
+    <div class="grid grid-2" style="margin-bottom:12px;max-width:600px;">
+      <div class="field"><label>Test date (applies to all)</label><input type="date" data-chem-date-all value="${esc(tests[0].testDate)}"></div>
+      <div class="field"><label>Equipment (applies to all)</label>${equipmentSelectHTML(tests[0].equipmentId, 'data-chem-equip-all')}</div>
+    </div>
     ${methodDatalist("Chemical","method-list-chem")}
-    ${tests.map((t,i)=>`
-      <div class="row-head" style="margin-bottom:8px;margin-top:${i>0?"14px":"0"};">
-        <span class="tag">Sample ${i+1}</span>
-        ${tests.length>1 ? `<button class="icon-btn" data-chemtest-del="${t.id}" style="margin-left:auto;">✕ remove</button>` : ""}
-      </div>
-      <div class="grid grid-2" style="margin-bottom:10px;">
-        <div class="field"><label>Test date</label><input type="date" data-chemtest-field="testDate" data-chemtest-id="${t.id}" value="${esc(t.testDate)}"></div>
-        <div class="field"><label>Equipment</label>${equipmentSelectHTML(t.equipmentId, `data-chemtest-field="equipmentId" data-chemtest-id="${t.id}"`)}</div>
-      </div>
-      <div class="chem-grid">
-        ${CHEM_ELEMENTS.map(el=>{
+    <div style="overflow-x:auto;">
+    <table>
+      <thead><tr>
+        <th>Element</th>
+        ${tests.map((t,i)=>`<th>${resultLabel(i)} ${tests.length>1?`<button class="icon-btn" data-chemtest-del="${t.id}" title="Remove">✕</button>`:""}</th>`).join("")}
+        <th>Requirement</th>
+      </tr></thead>
+      <tbody>
+        ${CHEM_ELEMENTS.map(el=>`<tr><td>${el}</td>${tests.map(t=>{
           const val = num(t[el]); const hasVal = t[el]!==undefined && t[el]!=="";
           const pass = hasVal ? checkConform(val, req[el]) : null;
-          return `<div class="chem-element-block">
-            <div class="row-head" style="margin-bottom:8px;">
-              <span class="tag">${el}</span>
-              ${pass===true?'<span class="conform-pass" style="margin-left:auto;">✓ pass</span>':pass===false?'<span class="conform-fail" style="margin-left:auto;">✕ fail</span>':''}
-            </div>
-            <div class="field"><label>Result (wt %)</label><input type="number" step="any" data-chemtest-field="${el}" data-chemtest-id="${t.id}" value="${esc(t[el])}"></div>
-          </div>`;
-        }).join("")}
-      </div>
-    `).join("")}
-    <div class="subhead">Requirement &amp; test method (shared across all samples above)</div>
-    <div class="chem-grid">
-      ${CHEM_ELEMENTS.map(el=>`
-        <div class="chem-element-block">
-          <div class="row-head" style="margin-bottom:8px;"><span class="tag">${el}</span></div>
-          <div class="field"><label>Requirement</label><input class="req-input" type="text" data-chem-req-field="${el}" value="${esc(req[el])}" placeholder="e.g. 0.35 max."></div>
-          <div class="field"><label>Test method</label><input class="req-input" type="text" list="method-list-chem" data-chem-method-field="${el}" value="${esc(method[el])}" placeholder="e.g. ASTM E415:2021"></div>
-        </div>`).join("")}
-      <div class="chem-element-block">
-        <div class="row-head" style="margin-bottom:8px;"><span class="tag">CE (IIW)</span></div>
-        <div class="field"><label>Requirement</label><input class="req-input" type="text" data-chem-req-field="CE" value="${esc(req.CE)}" placeholder="e.g. 0.47 max."></div>
-        <div class="field"><label>Test method</label><input class="req-input" type="text" data-chem-method-field="CE" value="${esc(method.CE)}" placeholder="e.g. calculated"></div>
-      </div>
+          return `<td><input type="number" step="any" data-chemtest-field="${el}" data-chemtest-id="${t.id}" value="${esc(t[el])}" style="width:100%;min-width:80px;">${pass===true?' <span style="color:var(--teal);font-weight:600;">✓</span>':pass===false?' <span style="color:var(--red);font-weight:700;">✕</span>':''}</td>`;
+        }).join("")}<td><input class="req-input" type="text" data-chem-req-field="${el}" value="${esc(req[el])}" placeholder="e.g. 0.35 max." style="width:100%;min-width:100px;"></td></tr>`).join("")}
+        <tr style="background:var(--result-bg,#f3f7f5);"><td style="font-weight:600;">CE (IIW) <span style="color:var(--ink-soft);font-size:10px;font-weight:400;">(calculated)</span></td>${tests.map(t=>{
+          const ce = calcCE(t);
+          const pass = checkConform(ce, req.CE);
+          return `<td>${fmt(ce,3)}${pass===true?' <span style="color:var(--teal);font-weight:600;">✓</span>':pass===false?' <span style="color:var(--red);font-weight:700;">✕</span>':''}</td>`;
+        }).join("")}<td><input class="req-input" type="text" data-chem-req-field="CE" value="${esc(req.CE)}" placeholder="e.g. 0.47 max." style="width:100%;min-width:100px;"></td></tr>
+      </tbody>
+    </table>
     </div>
     <div class="field" style="margin-top:14px;"><label>Remarks</label><textarea data-chem-field="remarks">${esc(s.chemical.remarks)}</textarea></div>
     <div class="hint">CE = C + Mn/6 + (Cr+Mo+V)/5 + (Ni+Cu)/15</div>
-
     <button class="btn amber" style="margin-top:14px;" id="chem-save">Save composition</button>
   </div>`;
 }
@@ -5056,6 +5043,16 @@ function attachSampleDetailHandlers(){
         const t = ensureChemicalTests(s).find(x=>x.id===el.getAttribute("data-chemtest-id"));
         if(t) t[el.getAttribute("data-chemtest-field")] = el.value;
       });
+    });
+    const chemDateAll = document.querySelector("[data-chem-date-all]");
+    if(chemDateAll) chemDateAll.addEventListener("change", async ()=>{
+      ensureChemicalTests(s).forEach(t=>{ t.testDate = chemDateAll.value; });
+      await saveDB(); render();
+    });
+    const chemEquipAll = document.querySelector("[data-chem-equip-all]");
+    if(chemEquipAll) chemEquipAll.addEventListener("change", async ()=>{
+      ensureChemicalTests(s).forEach(t=>{ t.equipmentId = chemEquipAll.value; });
+      await saveDB(); render();
     });
     const chemAddBtn = document.getElementById("chem-add-sample");
     if(chemAddBtn) chemAddBtn.onclick = async ()=>{
