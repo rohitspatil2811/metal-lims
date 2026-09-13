@@ -923,8 +923,8 @@ const CORROSION_TEMPLATES = {
   },
 };
 /* ===================== STANDALONE HARDNESS TEST ===================== */
-function newHardnessSpecimen(){
-  return {id:uid(), label:"", scale:"HB", readings:"", requirement:""};
+function newHardnessSpecimen(scale){
+  return {id:uid(), label:"", scale:scale||"HBW", readings:"", requirement:"", remarks:""};
 }
 function calcHardnessSpecimen(sp){
   const vals = (sp.readings||"").split(/[,\s]+/).map(s=>parseFloat(s)).filter(n=>!isNaN(n));
@@ -994,7 +994,7 @@ function blankSample(){
     corrosionTests:[],
     metallography:{grainSizeASTM:"",phasePercent:"",inclusionRating:"",microstructure:"",remarks:"",testMethod:"ASTM E112 / ASTM E45", testMethodsExtra:[], testDate:"", equipmentId:""},
     flattening:{testMethod:"ASTM A530 / ASTM A999", testMethodsExtra:[], pieces:[], testDate:"", equipmentId:""},
-    hardnessTest:{testMethod:"ASTM E10 / E92 / E18", testMethodsExtra:[], specimens:[], testDate:"", equipmentId:""},
+    hardnessTest:{testMethod:"ASTM E10", testMethodsExtra:[], specimens:[], testDate:"", equipmentId:""},
     bendTest:{testMethod:"ASTM E190 / AWS D1.1 (Guided Bend Test)", testMethodsExtra:[], specimens:[], testDate:"", equipmentId:""},
     additionalTests:[],
     createdBy:session?session.username:"", createdAt:new Date().toISOString()
@@ -1386,7 +1386,7 @@ function renderSampleDetail(){
   if(!s){ view="dashboard"; return renderDashboard(); }
   if(!s.flattening) s.flattening = {testMethod:"ASTM A530 / ASTM A999", pieces:[]};
   if(!s.corrosionTests) s.corrosionTests = [];
-  if(!s.hardnessTest) s.hardnessTest = {testMethod:"ASTM E10 / E92 / E18", specimens:[]};
+  if(!s.hardnessTest) s.hardnessTest = {testMethod:"ASTM E10", specimens:[]};
   if(!s.bendTest) s.bendTest = {testMethod:"ASTM E190 / AWS D1.1 (Guided Bend Test)", specimens:[]};
   if(!s.testsRequested.hasOwnProperty("flattening")) s.testsRequested.flattening = false;
   const tabs = [["overview","Overview"]];
@@ -2010,6 +2010,7 @@ function renderFlatteningTab(s){
     </table>`}
   </div>`;
 }
+const HARDNESS_METHOD_SCALE_MAP = {"ASTM E10":"HBW", "ASTM E18":"HRC", "ASTM E92":"HV10"};
 function renderHardnessTestTab(s){
   const h = s.hardnessTest;
   const specimens = h.specimens;
@@ -2017,7 +2018,13 @@ function renderHardnessTestTab(s){
   <div class="panel">
     <div class="panel-title"><span>Hardness test</span></div>
     <div class="grid grid-3">
-      <div class="field"><label>Test method</label><input type="text" list="method-list-hard" data-hardness-meta-field="testMethod" value="${esc(h.testMethod)}" placeholder="e.g. ASTM E10 / E92 / E18"></div>
+      <div class="field"><label>Test method</label>
+        <select data-hardness-meta-field="testMethod">
+          <option value="ASTM E10" ${h.testMethod==="ASTM E10"?"selected":""}>ASTM E10 — Brinell (HBW)</option>
+          <option value="ASTM E18" ${h.testMethod==="ASTM E18"?"selected":""}>ASTM E18 — Rockwell (HRB / HRC)</option>
+          <option value="ASTM E92" ${h.testMethod==="ASTM E92"?"selected":""}>ASTM E92 — Vickers (HV10)</option>
+        </select>
+      </div>
       <div class="field"><label>Test date</label><input type="date" data-hardness-meta-field="testDate" value="${esc(h.testDate)}"></div>
       <div class="field"><label>Equipment</label>${equipmentSelectHTML(h.equipmentId, 'data-hardness-meta-field="equipmentId"')}</div>
       ${renderMethodExtraRows(s,"hardnessTest","method-list-hard")}
@@ -2030,7 +2037,7 @@ function renderHardnessTestTab(s){
     </div>
     ${specimens.length===0 ? `<div class="empty-state"><div class="big">No specimens added</div><div>Add a specimen for each hardness test performed.</div></div>` : `
     <table>
-      <thead><tr><th>Specimen / label</th><th>Scale</th><th>Readings</th><th>Average</th><th>Requirement</th><th></th></tr></thead>
+      <thead><tr><th>Specimen / label</th><th>Scale</th><th>Readings</th><th>Average</th><th>Requirement</th><th>Remarks</th><th></th></tr></thead>
       <tbody>
         ${specimens.map((sp,i)=>{
           const c = calcHardnessSpecimen(sp);
@@ -2040,8 +2047,8 @@ function renderHardnessTestTab(s){
           <td><input type="text" data-hardness-field="label" data-hardness-id="${sp.id}" value="${esc(sp.label)||('Specimen '+(i+1))}" style="width:110px;"></td>
           <td>
             <select data-hardness-field="scale" data-hardness-id="${sp.id}">
-              <option value="HB" ${(sp.scale||"HB")==="HB"?"selected":""}>Brinell (HB)</option>
-              <option value="HV" ${sp.scale==="HV"?"selected":""}>Vickers (HV)</option>
+              <option value="HBW" ${(sp.scale||"HBW")==="HBW"?"selected":""}>Brinell (HBW)</option>
+              <option value="HV10" ${sp.scale==="HV10"?"selected":""}>Vickers (HV10)</option>
               <option value="HRC" ${sp.scale==="HRC"?"selected":""}>Rockwell C (HRC)</option>
               <option value="HRB" ${sp.scale==="HRB"?"selected":""}>Rockwell B (HRB)</option>
             </select>
@@ -2049,6 +2056,7 @@ function renderHardnessTestTab(s){
           <td><input type="text" data-hardness-field="readings" data-hardness-id="${sp.id}" value="${esc(sp.readings)}" style="width:150px;" placeholder="e.g. 180,182,179"></td>
           <td style="font-family:var(--mono);">${c.avg!==null?fmt(c.avg,1):"—"}${pass===true?' <span class="conform-pass">✓</span>':pass===false?' <span class="conform-fail">✕</span>':''}</td>
           <td><input class="req-input" type="text" data-hardness-field="requirement" data-hardness-id="${sp.id}" value="${esc(sp.requirement)}" style="width:140px;" placeholder="e.g. 197 max."></td>
+          <td><input type="text" data-hardness-field="remarks" data-hardness-id="${sp.id}" value="${esc(sp.remarks)}" style="width:140px;"></td>
           <td><button class="icon-btn" data-hardness-del="${sp.id}">✕</button></td>
         </tr>`;
         }).join("")}
@@ -4244,7 +4252,7 @@ function renderReport(mode){
   if(!s){ view="dashboard"; return renderDashboard(); }
   if(!s.flattening) s.flattening = {testMethod:"ASTM A530 / ASTM A999", pieces:[]};
   if(!s.corrosionTests) s.corrosionTests = [];
-  if(!s.hardnessTest) s.hardnessTest = {testMethod:"ASTM E10 / E92 / E18", specimens:[]};
+  if(!s.hardnessTest) s.hardnessTest = {testMethod:"ASTM E10", specimens:[]};
   if(!s.bendTest) s.bendTest = {testMethod:"ASTM E190 / AWS D1.1 (Guided Bend Test)", specimens:[]};
   const bars = Array.from({length:38}, ()=> 1+Math.floor(Math.random()*4));
 
@@ -4523,7 +4531,7 @@ function buildWordHTML(s, mode){
   const isRecord = mode === "record";
   if(!s.flattening) s.flattening = {testMethod:"ASTM A530 / ASTM A999", pieces:[]};
   if(!s.corrosionTests) s.corrosionTests = [];
-  if(!s.hardnessTest) s.hardnessTest = {testMethod:"ASTM E10 / E92 / E18", specimens:[]};
+  if(!s.hardnessTest) s.hardnessTest = {testMethod:"ASTM E10", specimens:[]};
   if(!s.bendTest) s.bendTest = {testMethod:"ASTM E190 / AWS D1.1 (Guided Bend Test)", specimens:[]};
   const W = (label,val)=>`<tr><td style="padding:3px 10px 3px 0;font-weight:bold;width:35%;border:none;border-bottom:0.5pt solid #e3e7e2;vertical-align:top;">${esc(label)}</td><td style="padding:3px 0;border:none;border-bottom:0.5pt solid #e3e7e2;">${val}</td></tr>`;
   const sectionTitle = (t)=>`<h3 style="font-size:10.5pt;text-transform:uppercase;letter-spacing:1px;color:#333;border-bottom:1.5pt solid #182228;padding-bottom:2px;margin:12px 0 4px 0;">${esc(t)}</h3>`;
@@ -5262,13 +5270,19 @@ function attachSampleDetailHandlers(){
   if(activeSampleTab==="hardnessTest"){
     document.querySelectorAll("[data-hardness-meta-field]").forEach(el=>{
       el.addEventListener("change", async ()=>{
-        s.hardnessTest[el.getAttribute("data-hardness-meta-field")] = el.value;
-        await saveDB();
+        const field = el.getAttribute("data-hardness-meta-field");
+        s.hardnessTest[field] = el.value;
+        if(field==="testMethod"){
+          const scale = HARDNESS_METHOD_SCALE_MAP[el.value];
+          if(scale) s.hardnessTest.specimens.forEach(sp=>{ sp.scale = scale; });
+        }
+        await saveDB(); render();
       });
     });
     const addBtn = document.getElementById("hardness-add");
     if(addBtn) addBtn.onclick = async ()=>{
-      s.hardnessTest.specimens.push(newHardnessSpecimen());
+      const scale = HARDNESS_METHOD_SCALE_MAP[s.hardnessTest.testMethod] || "HBW";
+      s.hardnessTest.specimens.push(newHardnessSpecimen(scale));
       await saveDB(); render();
     };
     document.querySelectorAll("[data-hardness-del]").forEach(el=>{
