@@ -2217,7 +2217,7 @@ function existingCustomerNames(){
   Object.values(DB.samples||{}).forEach(s=>{ if(s.customerName) names.add(s.customerName); });
   return Array.from(names).sort();
 }
-function autoGenerateTensileResult(sp, req){
+function autoGenerateTensileResult(sp, req, wantHardness){
   const area = calcSpecimen(sp).area0;
   if(!area) return;
   const yReq = parseReq(req.yieldReq), uReq = parseReq(req.utsReq), eReq = parseReq(req.elongReq), rReq = parseReq(req.raReq);
@@ -2234,6 +2234,10 @@ function autoGenerateTensileResult(sp, req){
   if(ra!==null && (sp.areaType||"round")==="round"){
     const Af = area*(1-ra/100);
     sp.finalDiameter = Math.sqrt(Af*4/Math.PI).toFixed(2);
+  }
+  if(wantHardness && !sp.hardnessReq && !sp.hardness){
+    sp.hardness = String(Math.round(140+Math.random()*20));
+    sp.hardnessScale = sp.hardnessScale || "HBW";
   }
 }
 function autoGenerateChemicalResult(test, req){
@@ -2417,7 +2421,7 @@ function attachQuickWizardHandlers(){
             const spec = DB.specs[wd.specId];
             sp.yieldReq = spec.yieldReq; sp.utsReq = spec.utsReq; sp.elongReq = spec.elongReq; sp.raReq = spec.raReq;
           }
-          autoGenerateTensileResult(sp, sp);
+          autoGenerateTensileResult(sp, sp, s.testsRequested.hardnessTest);
           return sp;
         });
         s.mechanical.specimens = specs;
@@ -4481,16 +4485,11 @@ function renderReport(mode){
     ${mechBlock}${corrBlock}${chemBlock}${hicBlock}${metaBlock}${addlBlock}
 
     <div class="report-disclaimer">
-      <b>Decision Rule (ISO/IEC 17025, ILAC-G8:2019):</b> Simple acceptance rule applied, i.e. Acceptance Limit (AL) = Tolerance Limit (TL) — results are
-      rounded off appropriately and compared directly with the specification, without a formal guard-band for measurement uncertainty, unless stated otherwise.
-    </div>
-    <div class="report-disclaimer">
-      <b>Measurement Uncertainty:</b> Estimated measurement uncertainty is not included in the reported results, unless specifically requested by the customer
-      and stated against the relevant result.
-    </div>
-    <div class="report-disclaimer">
-      <b>Opinions &amp; Interpretation:</b> Pass/Fail statements shown against individual results are the laboratory's opinion, formed by comparing the
-      measured result with the stated requirement per the Decision Rule above.
+      <ul style="margin:0 0 0 16px;padding:0;">
+        <li><b>Decision Rule (ISO/IEC 17025, ILAC-G8:2019):</b> Simple acceptance rule applied, i.e. Acceptance Limit (AL) = Tolerance Limit (TL) — results are rounded off appropriately and compared directly with the specification, without a formal guard-band for measurement uncertainty, unless stated otherwise.</li>
+        <li><b>Measurement Uncertainty:</b> Estimated measurement uncertainty is not included in the reported results, unless specifically requested by the customer and stated against the relevant result.</li>
+        <li><b>Opinions &amp; Interpretation:</b> Pass/Fail statements shown against individual results are the laboratory's opinion, formed by comparing the measured result with the stated requirement per the Decision Rule above.</li>
+      </ul>
     </div>
     ${!isRecord ? `<div class="report-disclaimer"><b>Page:</b> 1 of 1</div>` : ""}
     <div class="report-disclaimer">
@@ -4777,17 +4776,11 @@ function buildWordHTML(s, mode){
     ${mech}${corr}${chem}${hic}${metallo}${addl}
 
     <p style="font-size:7.5pt;line-height:1.5;color:#666;margin-top:16px;padding-top:6px;border-top:0.5pt solid #ccc;">
-      <b style="color:#333;">Decision Rule (ISO/IEC 17025, ILAC-G8:2019):</b> Simple acceptance rule applied, i.e. Acceptance Limit (AL) = Tolerance
-      Limit (TL) — results are rounded off appropriately and compared directly with the specification, without a formal guard-band for
-      measurement uncertainty, unless stated otherwise.
-    </p>
-    <p style="font-size:7.5pt;line-height:1.5;color:#666;margin-top:8px;">
-      <b style="color:#333;">Measurement Uncertainty:</b> Estimated measurement uncertainty is not included in the reported results, unless
-      specifically requested by the customer and stated against the relevant result.
-    </p>
-    <p style="font-size:7.5pt;line-height:1.5;color:#666;margin-top:8px;">
-      <b style="color:#333;">Opinions &amp; Interpretation:</b> Pass/Fail statements shown against individual results are the laboratory's opinion,
-      formed by comparing the measured result with the stated requirement per the Decision Rule above.
+      <ul style="margin:0 0 0 16px;padding:0;">
+        <li><b style="color:#333;">Decision Rule (ISO/IEC 17025, ILAC-G8:2019):</b> Simple acceptance rule applied, i.e. Acceptance Limit (AL) = Tolerance Limit (TL) — results are rounded off appropriately and compared directly with the specification, without a formal guard-band for measurement uncertainty, unless stated otherwise.</li>
+        <li><b style="color:#333;">Measurement Uncertainty:</b> Estimated measurement uncertainty is not included in the reported results, unless specifically requested by the customer and stated against the relevant result.</li>
+        <li><b style="color:#333;">Opinions &amp; Interpretation:</b> Pass/Fail statements shown against individual results are the laboratory's opinion, formed by comparing the measured result with the stated requirement per the Decision Rule above.</li>
+      </ul>
     </p>
     ${!isRecord ? `<p style="font-size:7.5pt;color:#666;margin-top:8px;"><b style="color:#333;">Page:</b> 1 of 1</p>` : ""}
     <p style="font-size:7.5pt;line-height:1.5;color:#666;margin-top:8px;">
