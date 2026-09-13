@@ -114,6 +114,10 @@
   .grid-3{grid-template-columns:1fr 1fr 1fr;}
   .grid-4{grid-template-columns:1fr 1fr 1fr 1fr;}
   @media (max-width:840px){.grid-2,.grid-3,.grid-4{grid-template-columns:1fr;}}
+  .chem-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-top:4px;}
+  .chem-element-block{border:1px solid var(--line-soft);border-radius:6px;padding:10px;background:var(--panel);}
+  .chem-element-block .field{margin-bottom:8px;}
+  .chem-element-block .field:last-child{margin-bottom:0;}
 
   label{display:block;font-size:11.5px;color:var(--ink-soft);margin-bottom:5px;font-weight:600;letter-spacing:.2px;}
   input[type=text],input[type=password],input[type=number],input[type=date],select,textarea{
@@ -530,11 +534,15 @@ function calcSpecimen(sp){
   const areaType = sp.areaType || "round";
   const area0 = areaFor(areaType, sp, "");
   const areaF = areaFor(areaType, sp, "final");
-  const YS = (area0!==null && area0>0) ? num(sp.yieldLoad)/area0 : null;
-  const UTS = (area0!==null && area0>0) ? num(sp.ultimateLoad)/area0 : null;
+  const hasYieldLoad = sp.yieldLoad!==undefined && sp.yieldLoad!=="";
+  const hasUltLoad = sp.ultimateLoad!==undefined && sp.ultimateLoad!=="";
+  const YS = (hasYieldLoad && area0!==null && area0>0) ? num(sp.yieldLoad)/area0 : null;
+  const UTS = (hasUltLoad && area0!==null && area0>0) ? num(sp.ultimateLoad)/area0 : null;
+  const hasL0 = sp.gaugeLength!==undefined && sp.gaugeLength!=="";
+  const hasLf = sp.finalGaugeLength!==undefined && sp.finalGaugeLength!=="";
   const L0 = num(sp.gaugeLength);
   const Lf = num(sp.finalGaugeLength);
-  const elong = L0>0 ? ((Lf-L0)/L0)*100 : null;
+  const elong = (hasL0 && hasLf && L0>0) ? ((Lf-L0)/L0)*100 : null;
   const RA = (area0!==null && area0>0 && areaF!==null) ? ((area0-areaF)/area0)*100 : null;
   const hardVals = (sp.hardness||"").split(/[,\s]+/).map(s=>parseFloat(s)).filter(n=>!isNaN(n));
   const avgHardness = hardVals.length ? hardVals.reduce((a,b)=>a+b,0)/hardVals.length : null;
@@ -758,6 +766,35 @@ function parseSpecWorkbook(arrayBuffer){
     specs.push(spec);
   }
   return specs;
+}
+const CHEM_ELEMENTS = ["C","Mn","Si","S","P","Cr","Mo","Ni","Cu","V","Nb","Ti","Al"];
+function blankChemTest(){
+  const t = {id:uid(), testDate:"", equipmentId:""};
+  CHEM_ELEMENTS.forEach(el=>{ t[el] = ""; });
+  return t;
+}
+/* Migrates old single-result chemical data (one flat s.chemical object) into the
+   multi-sample format (s.chemical.tests[]) without losing anything already entered. */
+function ensureChemicalTests(s, minCount){
+  let created = false;
+  if(!s.chemical.tests){
+    const first = blankChemTest();
+    first.testDate = s.chemical.testDate || "";
+    first.equipmentId = s.chemical.equipmentId || "";
+    CHEM_ELEMENTS.forEach(el=>{ first[el] = s.chemical[el] || ""; });
+    s.chemical.tests = [first];
+    created = true;
+  }
+  if(minCount){
+    while(s.chemical.tests.length < minCount){
+      s.chemical.tests.push(blankChemTest());
+      created = true;
+    }
+  }
+  if(!s.chemical.req) s.chemical.req = {};
+  if(!s.chemical.method) s.chemical.method = {};
+  if(created) saveDB();
+  return s.chemical.tests;
 }
 function calcCE(c){
   const C=num(c.C),Mn=num(c.Mn),Cr=num(c.Cr),Mo=num(c.Mo),V=num(c.V),Ni=num(c.Ni),Cu=num(c.Cu);
@@ -1473,7 +1510,27 @@ function renderOverviewTab(s){
   </div>`;
 }
 
+function blankTensileSpecimen(areaType){
+  return {id:uid(),areaType:areaType||"round",
+    diameter:"",finalDiameter:"",
+    outerDia:"",innerDia:"",finalOuterDia:"",finalInnerDia:"",
+    width:"",thickness:"",finalWidth:"",finalThickness:"",
+    area0Manual:"",areaFManual:"",
+    gaugeLength:"",finalGaugeLength:"",yieldLoad:"",ultimateLoad:"",hardness:"",hardnessScale:"HB",
+    yieldReq:"",utsReq:"",elongReq:"",raReq:"",hardnessReq:""};
+}
+function ensureMinSpecimens(s, min){
+  const sharedType = s.mechanical.sharedAreaType || (s.mechanical.specimens[0] && s.mechanical.specimens[0].areaType) || "round";
+  let added = false;
+  while(s.mechanical.specimens.length < min){
+    s.mechanical.specimens.push(blankTensileSpecimen(sharedType));
+    added = true;
+  }
+  if(added) saveDB();
+  return s.mechanical.specimens;
+}
 function renderMechanicalTab(s){
+  if(s.testsRequested.mechanical) ensureMinSpecimens(s, 4);
   const specs = s.mechanical.specimens;
   return `
   <div class="panel">
@@ -1490,12 +1547,62 @@ function renderMechanicalTab(s){
     </div>
   </div>
   <div class="panel">
-    <div class="panel-title"><span>Tensile / yield / hardness specimens</span>
+    <div class="panel-title"><span>Tensile / yield / hardness — all specimens</span>
       <button class="btn small amber" id="mech-add">+ Add specimen</button>
     </div>
-    ${specs.length===0 ? `<div class="empty-state"><div class="big">No specimens added</div><div>Add a specimen row to enter dimensions and loads.</div></div>` : ""}
-    ${specs.map((sp,i)=>renderSpecimenRow(sp,i)).join("")}
-  </div>`;
+    ${renderTensileEntryTable(s)}
+  </div>
+  `;
+}
+function renderTensileEntryTable(s){
+  const specs = s.mechanical.specimens;
+  if(specs.length===0) return `<div class="empty-state"><div class="big">No specimens added</div><div>Add a specimen to start entering dimensions and loads.</div></div>`;
+  const sharedType = s.mechanical.sharedAreaType || specs[0].areaType || "round";
+  const rawFields = tensileRawFieldsForType(sharedType);
+  const resultLabel = (i)=> i===0 ? "Result" : "Result "+i;
+  const inputCell = (sp, field, type)=> `<td><input type="${type||"number"}" ${type!=="text"?'step="any"':""} data-spec-field="${field}" data-spec-id="${sp.id}" value="${esc(sp[field])}" style="width:100%;min-width:90px;"></td>`;
+  const inputRow = (field, label, type)=> `<tr><td>${label}</td>${specs.map(sp=>inputCell(sp,field,type)).join("")}<td></td></tr>`;
+  const calcs = specs.map(calcSpecimen);
+  const calcRow = (label, calcFn, reqField, decimals)=>{
+    const cells = calcs.map(c=>{
+      const v = calcFn(c);
+      const pass = reqField ? checkConform(v, specs[0][reqField]) : null;
+      return `<td style="background:var(--result-bg,#f3f7f5);">${v!==null?fmt(v,decimals):"—"}${pass===true?' <span style="color:var(--teal);font-weight:600;">✓</span>':pass===false?' <span style="color:var(--red);font-weight:700;">✕</span>':''}</td>`;
+    });
+    const reqCell = reqField
+      ? `<td><input class="req-input" type="text" data-spec-req-all="${reqField}" value="${esc(specs[0][reqField])}" placeholder="e.g. 250 min." style="width:100%;min-width:100px;"></td>`
+      : `<td></td>`;
+    return `<tr><td style="font-weight:600;">${label} <span style="color:var(--ink-soft);font-size:10px;font-weight:400;">(calculated)</span></td>${cells.join("")}${reqCell}</tr>`;
+  };
+  return `
+    <div class="field" style="max-width:260px;margin-bottom:12px;"><label>Cross-section type (shared by all specimens)</label>
+      <select id="mech-shared-areatype">
+        ${AREA_TYPES.map(a=>`<option value="${a.id}" ${a.id===sharedType?"selected":""}>${esc(a.label)}</option>`).join("")}
+      </select>
+    </div>
+    <div style="overflow-x:auto;">
+    <table>
+      <thead><tr>
+        <th>Test Parameter</th>
+        ${specs.map((sp,i)=>`<th>${resultLabel(i)} <button class="icon-btn" data-spec-del="${sp.id}" title="Remove">✕</button></th>`).join("")}
+        <th>Requirement</th>
+      </tr></thead>
+      <tbody>
+        ${rawFields.map(([f,l])=>inputRow(f,l)).join("")}
+        ${calcRow("Cross-sectional area, orig. (mm²)", c=>c.area0, null, 2)}
+        ${inputRow("gaugeLength","Original gauge length (mm)")}
+        ${inputRow("finalGaugeLength","Final gauge length (mm)")}
+        ${inputRow("yieldLoad","Yield load (N)")}
+        ${inputRow("ultimateLoad","Ultimate load (N)")}
+        ${inputRow("hardness","Hardness readings (comma sep.)","text")}
+        ${calcRow("Yield strength (MPa)", c=>c.YS, "yieldReq", 2)}
+        ${calcRow("Tensile strength (MPa)", c=>c.UTS, "utsReq", 2)}
+        ${calcRow("Elongation (%)", c=>c.elong, "elongReq", 1)}
+        ${calcRow("Reduction of area (%)", c=>c.RA, "raReq", 1)}
+        ${calcRow("Avg. hardness", c=>c.avgHardness, "hardnessReq", 1)}
+      </tbody>
+    </table>
+    </div>`;
 }
 function specimenDimensionFields(sp){
   const t = sp.areaType || "round";
@@ -1580,45 +1687,100 @@ function renderSpecimenRow(sp,i){
   </div>`;
 }
 
+function chemicalComparisonTable(s, forWord){
+  const tests = ensureChemicalTests(s, 4);
+  const req = s.chemical.req || {};
+  const rows = CHEM_ELEMENTS.map(el=>({
+    label: "% "+el,
+    values: tests.map(t=>{ const v=num(t[el]); return (t[el]!==undefined && t[el]!=="") ? fmt(v,3) : "—"; }),
+    raw: tests.map(t=>num(t[el])),
+    req: req[el]||"—",
+  }));
+  rows.push({
+    label: "CE (IIW)",
+    values: tests.map(t=>fmt(calcCE(t),3)),
+    raw: tests.map(t=>calcCE(t)),
+    req: req.CE||"—",
+  });
+  const headCells = ["Element", ...tests.map((t,i)=>`Sample ${i+1}`), "Requirement"];
+  if(forWord){
+    const th = (t)=>`<th style="border:none;border-bottom:1.25pt solid #182228;padding:4px 8px 4px 0;font-size:8.5pt;text-align:left;font-weight:bold;">${esc(t)}</th>`;
+    const td = (t)=>`<td style="border:none;border-bottom:0.5pt solid #d6dad4;padding:4px 8px 4px 0;font-size:8.5pt;">${t}</td>`;
+    return `<table style="border-collapse:collapse;width:100%;margin-bottom:8px;">
+      <tr>${headCells.map(th).join("")}</tr>
+      ${rows.map(r=>{
+        const cells = r.values.map((v,i)=>{
+          const pass = checkConform(r.raw[i], r.req);
+          return td(v + (pass===true?' <b style="color:#2f6f63;">PASS</b>':pass===false?' <b style="color:#a8493f;">FAIL</b>':''));
+        });
+        return `<tr>${td("<b>"+esc(r.label)+"</b>")}${cells.join("")}${td(esc(r.req))}</tr>`;
+      }).join("")}
+    </table>`;
+  }
+  return `<table>
+    <thead><tr>${headCells.map(h=>`<th>${esc(h)}</th>`).join("")}</tr></thead>
+    <tbody>
+      ${rows.map(r=>{
+        const cells = r.values.map((v,i)=>{
+          const pass = checkConform(r.raw[i], r.req);
+          return `<td>${v}${pass===true?' <span style="color:var(--teal);font-weight:600;">✓</span>':pass===false?' <span style="color:var(--red);font-weight:700;">✕</span>':''}</td>`;
+        });
+        return `<tr><td>${esc(r.label)}</td>${cells.join("")}<td>${esc(r.req)}</td></tr>`;
+      }).join("")}
+    </tbody>
+  </table>`;
+}
 function renderChemicalTab(s){
-  const c = s.chemical;
-  const req = c.req || {};
-  const method = c.method || {};
-  const elements = ["C","Mn","Si","S","P","Cr","Mo","Ni","Cu","V","Nb","Ti","Al"];
-  const CE = calcCE(c);
+  const tests = ensureChemicalTests(s, 4);
+  const req = s.chemical.req || {};
+  const method = s.chemical.method || {};
   return `
   <div class="panel">
-    <div class="panel-title"><span>Chemical composition (wt %)</span></div>
-    <div class="grid grid-3" style="margin-bottom:10px;">
-      <div class="field"><label>Test date</label><input type="date" data-chem-field="testDate" value="${esc(c.testDate)}"></div>
-      <div class="field"><label>Equipment</label>${equipmentSelectHTML(c.equipmentId, 'data-chem-field="equipmentId"')}</div>
+    <div class="panel-title"><span>Chemical composition (wt %)</span>
+      <button class="btn small amber" id="chem-add-sample">+ Add sample</button>
     </div>
+    <div class="hint" style="margin-bottom:10px;">For a batch test, add at least 4 samples — they'll line up as columns below, with Requirement in the last column. This same table prints on the report.</div>
     ${methodDatalist("Chemical","method-list-chem")}
-    <table style="margin-top:4px;">
-      <thead><tr><th>Element</th><th>Result</th><th>Requirement (e.g. 0.35 max., 0.10-0.35)</th><th>Test method</th><th>Status</th></tr></thead>
-      <tbody>
-        ${elements.map(el=>{
-          const val = num(c[el]); const hasVal = c[el]!==undefined && c[el]!=="";
+    ${tests.map((t,i)=>`
+      <div class="row-head" style="margin-bottom:8px;margin-top:${i>0?"14px":"0"};">
+        <span class="tag">Sample ${i+1}</span>
+        ${tests.length>1 ? `<button class="icon-btn" data-chemtest-del="${t.id}" style="margin-left:auto;">✕ remove</button>` : ""}
+      </div>
+      <div class="grid grid-2" style="margin-bottom:10px;">
+        <div class="field"><label>Test date</label><input type="date" data-chemtest-field="testDate" data-chemtest-id="${t.id}" value="${esc(t.testDate)}"></div>
+        <div class="field"><label>Equipment</label>${equipmentSelectHTML(t.equipmentId, `data-chemtest-field="equipmentId" data-chemtest-id="${t.id}"`)}</div>
+      </div>
+      <div class="chem-grid">
+        ${CHEM_ELEMENTS.map(el=>{
+          const val = num(t[el]); const hasVal = t[el]!==undefined && t[el]!=="";
           const pass = hasVal ? checkConform(val, req[el]) : null;
-          return `<tr>
-            <td style="font-weight:600;">${el}</td>
-            <td><input type="number" step="any" data-chem-field="${el}" value="${esc(c[el])}" style="width:100px;"></td>
-            <td><input class="req-input" type="text" data-chem-req-field="${el}" value="${esc(req[el])}" style="width:140px;" placeholder="e.g. 0.35 max."></td>
-            <td><input class="req-input" type="text" list="method-list-chem" data-chem-method-field="${el}" value="${esc(method[el])}" style="width:140px;" placeholder="e.g. ASTM E415:2021"></td>
-            <td>${pass===true?'<span class="conform-pass">✓ pass</span>':pass===false?'<span class="conform-fail">✕ fail</span>':'—'}</td>
-          </tr>`;
+          return `<div class="chem-element-block">
+            <div class="row-head" style="margin-bottom:8px;">
+              <span class="tag">${el}</span>
+              ${pass===true?'<span class="conform-pass" style="margin-left:auto;">✓ pass</span>':pass===false?'<span class="conform-fail" style="margin-left:auto;">✕ fail</span>':''}
+            </div>
+            <div class="field"><label>Result (wt %)</label><input type="number" step="any" data-chemtest-field="${el}" data-chemtest-id="${t.id}" value="${esc(t[el])}"></div>
+          </div>`;
         }).join("")}
-        <tr>
-          <td style="font-weight:600;">CE (IIW)</td>
-          <td style="font-family:var(--mono);font-weight:700;">${fmt(CE,3)}</td>
-          <td><input class="req-input" type="text" data-chem-req-field="CE" value="${esc(req.CE)}" style="width:140px;" placeholder="e.g. 0.47 max."></td>
-          <td><input class="req-input" type="text" data-chem-method-field="CE" value="${esc(method.CE)}" style="width:140px;" placeholder="e.g. calculated"></td>
-          <td>${(()=>{const p=checkConform(CE, req.CE); return p===true?'<span class="conform-pass">✓ pass</span>':p===false?'<span class="conform-fail">✕ fail</span>':'—';})()}</td>
-        </tr>
-      </tbody>
-    </table>
-    <div class="field" style="margin-top:14px;"><label>Remarks</label><textarea data-chem-field="remarks">${esc(c.remarks)}</textarea></div>
+      </div>
+    `).join("")}
+    <div class="subhead">Requirement &amp; test method (shared across all samples above)</div>
+    <div class="chem-grid">
+      ${CHEM_ELEMENTS.map(el=>`
+        <div class="chem-element-block">
+          <div class="row-head" style="margin-bottom:8px;"><span class="tag">${el}</span></div>
+          <div class="field"><label>Requirement</label><input class="req-input" type="text" data-chem-req-field="${el}" value="${esc(req[el])}" placeholder="e.g. 0.35 max."></div>
+          <div class="field"><label>Test method</label><input class="req-input" type="text" list="method-list-chem" data-chem-method-field="${el}" value="${esc(method[el])}" placeholder="e.g. ASTM E415:2021"></div>
+        </div>`).join("")}
+      <div class="chem-element-block">
+        <div class="row-head" style="margin-bottom:8px;"><span class="tag">CE (IIW)</span></div>
+        <div class="field"><label>Requirement</label><input class="req-input" type="text" data-chem-req-field="CE" value="${esc(req.CE)}" placeholder="e.g. 0.47 max."></div>
+        <div class="field"><label>Test method</label><input class="req-input" type="text" data-chem-method-field="CE" value="${esc(method.CE)}" placeholder="e.g. calculated"></div>
+      </div>
+    </div>
+    <div class="field" style="margin-top:14px;"><label>Remarks</label><textarea data-chem-field="remarks">${esc(s.chemical.remarks)}</textarea></div>
     <div class="hint">CE = C + Mn/6 + (Cr+Mo+V)/5 + (Ni+Cu)/15</div>
+
     <button class="btn amber" style="margin-top:14px;" id="chem-save">Save composition</button>
   </div>`;
 }
@@ -1719,19 +1881,77 @@ function renderCorrosionTestCard(test, i){
     ${resultsHTML}
   </div>`;
 }
+function ensureMinCorrosionTests(s, templateKey, min){
+  if(!s.corrosionTests) s.corrosionTests = [];
+  let added = false;
+  while(s.corrosionTests.filter(t=>t.template===templateKey).length < min){
+    s.corrosionTests.push(newCorrosionTest(templateKey));
+    added = true;
+  }
+  if(added) saveDB();
+  return s.corrosionTests.filter(t=>t.template===templateKey);
+}
+function renderCorrosionEntryTable(tests, tpl){
+  const resultLabel = (i)=> i===0 ? "Result" : "Result "+i;
+  const dataRows = tpl.fields.filter(f=>f.key!=="requirement");
+  const reqField = tpl.fields.find(f=>f.key==="requirement");
+  return `
+    <div class="grid grid-2" style="margin-bottom:12px;max-width:600px;">
+      <div class="field"><label>Test date (applies to all)</label><input type="date" data-corrtest-date-all value="${esc(tests[0].values.testDate)}"></div>
+      <div class="field"><label>Equipment (applies to all)</label>${equipmentSelectHTML(tests[0].values.equipmentId, 'data-corrtest-equip-all')}</div>
+    </div>
+    <div style="overflow-x:auto;">
+    <table>
+      <thead><tr>
+        <th>Test Parameter</th>
+        ${tests.map((t,i)=>`<th>${resultLabel(i)} <button class="icon-btn" data-corrtest-del="${t.id}" title="Remove">✕</button></th>`).join("")}
+        <th>Requirement</th>
+      </tr></thead>
+      <tbody>
+        ${dataRows.map(f=>`<tr><td>${esc(f.label)}</td>${tests.map(t=>{
+          const idAttr = `data-corrtest-id="${t.id}" data-corrtest-field="${f.key}"`;
+          let input;
+          if(f.type==="select") input = `<select ${idAttr} style="width:100%;">${(f.options||[]).map(o=>`<option value="${esc(o)}" ${t.values[f.key]===o?"selected":""}>${o===""?"—":esc(o)}</option>`).join("")}</select>`;
+          else if(f.type==="date") input = `<input type="date" ${idAttr} value="${esc(t.values[f.key])}" style="width:100%;">`;
+          else if(f.type==="number") input = `<input type="number" step="any" ${idAttr} value="${esc(t.values[f.key])}" style="width:100%;min-width:90px;">`;
+          else input = `<input type="text" ${idAttr} value="${esc(t.values[f.key])}" style="width:100%;min-width:110px;">`;
+          return `<td>${input}</td>`;
+        }).join("")}<td></td></tr>`).join("")}
+        ${tpl.massLoss ? `
+        <tr style="background:var(--result-bg,#f3f7f5);"><td style="font-weight:600;">Mass loss (g) <span style="color:var(--ink-soft);font-size:10px;font-weight:400;">(calculated)</span></td>${tests.map(t=>{
+          const c = calcMassLossCorrosion(t.values);
+          return `<td>${fmt(c.massLoss,4)}</td>`;
+        }).join("")}<td></td></tr>
+        <tr style="background:var(--result-bg,#f3f7f5);"><td style="font-weight:600;">Corrosion rate (mm/year) <span style="color:var(--ink-soft);font-size:10px;font-weight:400;">(calculated)</span></td>${tests.map(t=>{
+          const c = calcMassLossCorrosion(t.values);
+          const pass = checkConform(c.rate_mmpy, t.values.requirement);
+          return `<td>${c.rate_mmpy!==null?fmt(c.rate_mmpy,4):"—"}${pass===true?' <span style="color:var(--teal);font-weight:600;">✓</span>':pass===false?' <span style="color:var(--red);font-weight:700;">✕</span>':''}</td>`;
+        }).join("")}<td><input class="req-input" type="text" data-corrtest-req-all value="${esc(tests[0].values.requirement)}" placeholder="${esc(reqField&&reqField.placeholder)||''}" style="width:100%;min-width:100px;"></td></tr>
+        <tr style="background:var(--result-bg,#f3f7f5);"><td style="font-weight:600;">Corrosion rate (mpy) <span style="color:var(--ink-soft);font-size:10px;font-weight:400;">(calculated)</span></td>${tests.map(t=>{
+          const c = calcMassLossCorrosion(t.values);
+          return `<td>${c.rate_mpy!==null?fmt(c.rate_mpy,2):"—"}</td>`;
+        }).join("")}<td></td></tr>` : `
+        <tr><td>${reqField?esc(reqField.label):"Requirement"}</td>${tests.map(()=>`<td></td>`).join("")}<td><input class="req-input" type="text" data-corrtest-req-all value="${esc(tests[0].values.requirement)}" placeholder="${esc(reqField&&reqField.placeholder)||''}" style="width:100%;min-width:100px;"></td></tr>`}
+        ${!tpl.massLoss ? `<tr><td style="font-weight:600;">Overall result <span style="color:var(--ink-soft);font-size:10px;font-weight:400;">(calculated)</span></td>${tests.map(t=>{
+          const overall = corrosionTestOverallResult(t);
+          return `<td>${overall===true?'<span style="color:var(--teal);font-weight:600;">PASS ✓</span>':overall===false?'<span style="color:var(--red);font-weight:700;">FAIL ✕</span>':'—'}</td>`;
+        }).join("")}<td></td></tr>` : ""}
+      </tbody>
+    </table>
+    </div>`;
+}
 function renderCorrosionTemplateTab(s, templateKey){
   if(!s.corrosionTests) s.corrosionTests = [];
   const tpl = CORROSION_TEMPLATES[templateKey];
-  const tests = s.corrosionTests.filter(t=>t.template===templateKey);
+  const tests = ensureMinCorrosionTests(s, templateKey, 4);
   return `
   <div class="panel">
     <div class="panel-title"><span>${esc(tpl.label)}</span>
-      <button class="btn small amber" id="corr-add" data-corr-template="${templateKey}">+ Add test</button>
+      <button class="btn small amber" id="corr-add" data-corr-template="${templateKey}">+ Add specimen</button>
     </div>
-    <div class="hint">Add one entry per specimen/piece tested under this method. Fields below pre-fill the standard reagent and parameters — edit any value to match your actual run.</div>
+    <div class="hint">One column per specimen tested under this method — add at least 4. Fields pre-fill the standard reagent and parameters; edit any value to match your actual run. Requirement is set once in the last column.</div>
+    ${renderCorrosionEntryTable(tests, tpl)}
   </div>
-  ${tests.length===0 ? `<div class="panel"><div class="empty-state"><div class="big">No tests added yet</div><div>Click "+ Add test" above for each specimen tested.</div></div></div>` :
-    `<div class="panel">${tests.map((t,i)=>renderCorrosionTestCard(t,i)).join("")}</div>`}
   `;
 }
 
@@ -2005,6 +2225,36 @@ function existingCustomerNames(){
   Object.values(DB.samples||{}).forEach(s=>{ if(s.customerName) names.add(s.customerName); });
   return Array.from(names).sort();
 }
+function autoGenerateTensileResult(sp, req){
+  const area = calcSpecimen(sp).area0;
+  if(!area) return;
+  const yReq = parseReq(req.yieldReq), uReq = parseReq(req.utsReq), eReq = parseReq(req.elongReq), rReq = parseReq(req.raReq);
+  const YS = (yReq && yReq.min!==undefined) ? yReq.min + (30+Math.random()*20) : null;
+  const UTS = (uReq && uReq.min!==undefined) ? uReq.min + (50+Math.random()*20) : null;
+  const elongMin = (eReq && eReq.min!==undefined) ? eReq.min : null;
+  const elong = elongMin!==null ? elongMin + elongMin*(0.20+Math.random()*0.10) : null;
+  const raMin = (rReq && rReq.min!==undefined) ? rReq.min : null;
+  const ra = raMin!==null ? raMin + raMin*(0.30+Math.random()*0.10) : null;
+  if(YS!==null) sp.yieldLoad = Math.round(YS*area);
+  if(UTS!==null) sp.ultimateLoad = Math.round(UTS*area);
+  sp.gaugeLength = sp.gaugeLength || "50";
+  if(elong!==null) sp.finalGaugeLength = (parseFloat(sp.gaugeLength)*(1+elong/100)).toFixed(2);
+  if(ra!==null && (sp.areaType||"round")==="round"){
+    const Af = area*(1-ra/100);
+    sp.finalDiameter = Math.sqrt(Af*4/Math.PI).toFixed(2);
+  }
+}
+function autoGenerateChemicalResult(test, req){
+  CHEM_ELEMENTS.forEach(el=>{
+    const r = parseReq(req[el]);
+    if(!r) return;
+    let v;
+    if(r.min!==undefined && r.max!==undefined) v = r.min + Math.random()*(r.max-r.min);
+    else if(r.max!==undefined) v = r.max*(0.7+Math.random()*0.2);
+    else if(r.min!==undefined) v = r.min*(1.05+Math.random()*0.1);
+    if(v!==undefined) test[el] = v.toFixed(3);
+  });
+}
 function renderQuickWizard(){
   if(!wizardData) wizardData = {
     customerName:"", specId:"", materialGrade:"",
@@ -2050,7 +2300,9 @@ function renderQuickWizard(){
       <label class="checkline"><input type="checkbox" id="wiz-t-hic" ${wd.testsRequested.hic?"checked":""}> HIC — NACE TM0284</label>
       <label class="checkline"><input type="checkbox" id="wiz-t-metallography" ${wd.testsRequested.metallography?"checked":""}> Metallography</label>
       <label class="checkline"><input type="checkbox" id="wiz-t-additionalTests" ${wd.testsRequested.additionalTests?"checked":""}> Other / additional tests</label>
-    </div>`;
+    </div>
+    ${wd.testsRequested.mechanical ? `
+    <div class="field" style="margin-top:14px;max-width:260px;"><label>Test piece diameter (mm) — for auto-calculated results</label><input type="number" step="any" id="wiz-tensile-dia" value="${esc(wd.tensileDiameter)}"></div>` : ""}`;
   } else if(wizardStep===4){
     const specName = wd.specId && DB.specs[wd.specId] ? DB.specs[wd.specId].name : "— none —";
     const testsOn = Object.keys(wd.testsRequested).filter(k=>wd.testsRequested[k]);
@@ -2109,8 +2361,10 @@ function attachQuickWizardHandlers(){
   if(wizardStep===3){
     Object.keys(wd.testsRequested).forEach(k=>{
       const el = document.getElementById("wiz-t-"+k);
-      if(el) el.addEventListener("change", ()=>{ wd.testsRequested[k] = el.checked; });
+      if(el) el.addEventListener("change", ()=>{ wd.testsRequested[k] = el.checked; render(); });
     });
+    const diaEl = document.getElementById("wiz-tensile-dia");
+    if(diaEl) diaEl.addEventListener("change", ()=>{ wd.tensileDiameter = diaEl.value; });
   }
   const backBtn = document.getElementById("wiz-back");
   if(backBtn) backBtn.onclick = ()=>{ wizardStep = Math.max(1, wizardStep-1); render(); };
@@ -2125,6 +2379,22 @@ function attachQuickWizardHandlers(){
     s.specId = wd.specId || null;
     s.testsRequested = {...s.testsRequested, ...wd.testsRequested};
     if(wd.specId && DB.specs[wd.specId]) applySpecToSample(s, DB.specs[wd.specId]);
+    if(s.testsRequested.mechanical && wd.tensileDiameter){
+      const sp = blankTensileSpecimen("round");
+      sp.diameter = wd.tensileDiameter;
+      if(DB.specs[wd.specId]){
+        const spec = DB.specs[wd.specId];
+        sp.yieldReq = spec.yieldReq; sp.utsReq = spec.utsReq; sp.elongReq = spec.elongReq; sp.raReq = spec.raReq;
+      }
+      autoGenerateTensileResult(sp, sp);
+      s.mechanical.specimens = [sp];
+    }
+    if(s.testsRequested.chemical && DB.specs[wd.specId]){
+      const spec = DB.specs[wd.specId];
+      s.chemical.req = {...spec.chem, CE: spec.CE};
+      const tests = ensureChemicalTests(s, 1);
+      autoGenerateChemicalResult(tests[0], s.chemical.req);
+    }
     DB.samples[s.labNumber] = s;
     await saveDB();
     wizardData = null;
@@ -3831,6 +4101,66 @@ function downloadTRFWord(labNumber){
   setTimeout(()=>URL.revokeObjectURL(url), 1000);
 }
 
+function tensileRawFieldsForType(areaType){
+  if(areaType==="hollow") return [["outerDia","Outer dia., orig. (mm)"],["innerDia","Inner dia., orig. (mm)"],["finalOuterDia","Outer dia., final (mm)"],["finalInnerDia","Inner dia., final (mm)"]];
+  if(areaType==="flat") return [["width","Width, orig. (mm)"],["thickness","Thickness, orig. (mm)"],["finalWidth","Width, final (mm)"],["finalThickness","Thickness, final (mm)"]];
+  if(areaType==="manual") return [["area0Manual","Area, orig. (mm²)"],["areaFManual","Area, final (mm²)"]];
+  return [["diameter","Diameter, orig. (mm)"],["finalDiameter","Diameter, final (mm)"]];
+}
+/* Transposed comparison table: one column per specimen (at least 4 recommended),
+   properties as rows, Requirement as the final column — the format for reporting
+   multiple test pieces from one sample side by side. */
+function tensileComparisonTable(s, forWord){
+  const specs = s.mechanical.specimens||[];
+  if(specs.length===0) return "";
+  const calcs = specs.map(calcSpecimen);
+  const areaTypesUsed = Array.from(new Set(specs.map(sp=>sp.areaType||"round")));
+  const rawFieldSet = areaTypesUsed.length===1 ? tensileRawFieldsForType(areaTypesUsed[0]) : tensileRawFieldsForType("round");
+  const rows = [];
+  rawFieldSet.forEach(([field,label])=>{
+    rows.push({label, values: specs.map(sp=>esc(sp[field])||"—"), req:""});
+  });
+  rows.push({label:"Cross-sectional area, orig. (mm²)", values: calcs.map(c=>c.area0!==null?fmt(c.area0):"—"), req:""});
+  rows.push({label:"Gauge length, orig. (mm)", values: specs.map(sp=>esc(sp.gaugeLength)||"—"), req:""});
+  rows.push({label:"Gauge length, final (mm)", values: specs.map(sp=>esc(sp.finalGaugeLength)||"—"), req:""});
+  rows.push({label:"Yield load (N)", values: specs.map(sp=>esc(sp.yieldLoad)||"—"), req:""});
+  rows.push({label:"Ultimate load (N)", values: specs.map(sp=>esc(sp.ultimateLoad)||"—"), req:""});
+  rows.push({label:"Yield strength (MPa)", values: calcs.map(c=>c.YS!==null?fmt(c.YS):"—"), req: specs[0].yieldReq||"—", raw: calcs.map(c=>c.YS)});
+  rows.push({label:"Tensile strength (MPa)", values: calcs.map(c=>c.UTS!==null?fmt(c.UTS):"—"), req: specs[0].utsReq||"—", raw: calcs.map(c=>c.UTS)});
+  rows.push({label:"Elongation (%)", values: calcs.map(c=>c.elong!==null?fmt(c.elong,1):"—"), req: specs[0].elongReq||"—", raw: calcs.map(c=>c.elong)});
+  rows.push({label:"Reduction of area (%)", values: calcs.map(c=>c.RA!==null?fmt(c.RA,1):"—"), req: specs[0].raReq||"—", raw: calcs.map(c=>c.RA)});
+  // Note: hardness is intentionally NOT a row here — it prints under its own separate
+  // "Hardness Test" heading (see embeddedHardnessFromTensile in the report builder),
+  // not inside the Tensile Test table, per an earlier explicit request to keep them apart.
+
+  const headCells = ["Property", ...specs.map((sp,i)=>`Specimen ${i+1}`), "Requirement"];
+  if(forWord){
+    const th = (t)=>`<th style="border:none;border-bottom:1.25pt solid #182228;padding:4px 8px 4px 0;font-size:8.5pt;text-align:left;font-weight:bold;">${esc(t)}</th>`;
+    const td = (t)=>`<td style="border:none;border-bottom:0.5pt solid #d6dad4;padding:4px 8px 4px 0;font-size:8.5pt;">${t}</td>`;
+    return `<table style="border-collapse:collapse;width:100%;margin-bottom:8px;">
+      <tr>${headCells.map(th).join("")}</tr>
+      ${rows.map(r=>{
+        const cells = r.values.map((v,i)=>{
+          const pass = r.raw ? checkConform(r.raw[i], r.req) : null;
+          return td(v + (pass===true?' <b style="color:#2f6f63;">PASS</b>':pass===false?' <b style="color:#a8493f;">FAIL</b>':''));
+        });
+        return `<tr>${td("<b>"+esc(r.label)+"</b>")}${cells.join("")}${td(esc(r.req)||"—")}</tr>`;
+      }).join("")}
+    </table>`;
+  }
+  return `<table>
+    <thead><tr>${headCells.map(h=>`<th>${esc(h)}</th>`).join("")}</tr></thead>
+    <tbody>
+      ${rows.map(r=>{
+        const cells = r.values.map((v,i)=>{
+          const pass = r.raw ? checkConform(r.raw[i], r.req) : null;
+          return `<td>${v}${pass===true?' <span style="color:var(--teal);font-weight:600;">✓</span>':pass===false?' <span style="color:var(--red);font-weight:700;">✕</span>':''}</td>`;
+        });
+        return `<tr><td>${esc(r.label)}</td>${cells.join("")}<td>${esc(r.req)||"—"}</td></tr>`;
+      }).join("")}
+    </tbody>
+  </table>`;
+}
 function tensileRawRows(sp){
   const rows = [];
   const at = sp.areaType || "round";
@@ -3878,6 +4208,11 @@ function renderReport(mode){
     const tMethod = combineMethods(s.mechanical.tensileMethod, s.mechanical.tensileMethodsExtra) || "—";
     if(s.mechanical.specimens.length===0){
       mechParts.push(testBlockHeader("Tensile Test", tMethod, s.mechanical.testDate, s.mechanical.tensileEquipmentId) + `<table><tbody><tr><td style="color:var(--ink-soft);">No specimen data recorded</td></tr></tbody></table>`);
+    } else if(s.mechanical.specimens.length>1){
+      s.mechanical.specimens.forEach((sp,i)=>{
+        if(sp.hardness) embeddedHardnessFromTensile.push({label: `Specimen ${i+1}`, scale: sp.hardnessScale||"HB", avg: calcSpecimen(sp).avgHardness, req: sp.hardnessReq});
+      });
+      mechParts.push(testBlockHeader("Tensile Test — "+s.mechanical.specimens.length+" specimens", tMethod, s.mechanical.testDate, s.mechanical.tensileEquipmentId) + tensileComparisonTable(s, false));
     } else {
       s.mechanical.specimens.forEach((sp,i)=>{
         const c = calcSpecimen(sp);
@@ -3890,9 +4225,8 @@ function renderReport(mode){
           ["Elongation", c.elong!==null?fmt(c.elong,1)+" %":"—", sp.elongReq||"—", c.elong],
           ["Reduction of area", c.RA!==null?fmt(c.RA,1)+" %":"—", sp.raReq||"—", c.RA],
         ];
-        if(sp.hardness) embeddedHardnessFromTensile.push({label: s.mechanical.specimens.length>1?`Specimen ${i+1}`:"", scale: sp.hardnessScale||"HB", avg: c.avgHardness, req: sp.hardnessReq});
-        const label = s.mechanical.specimens.length>1 ? `Tensile Test — Specimen ${i+1}` : "Tensile Test";
-        mechParts.push(testBlockHeader(label, tMethod, s.mechanical.testDate, s.mechanical.tensileEquipmentId) + vertTable(rows));
+        if(sp.hardness) embeddedHardnessFromTensile.push({label: "", scale: sp.hardnessScale||"HB", avg: c.avgHardness, req: sp.hardnessReq});
+        mechParts.push(testBlockHeader("Tensile Test", tMethod, s.mechanical.testDate, s.mechanical.tensileEquipmentId) + vertTable(rows));
       });
     }
   }
@@ -3958,21 +4292,12 @@ function renderReport(mode){
 
   /* ---- Chemical ---- */
   if(s.testsRequested.chemical){
-    const c = s.chemical; const CE = calcCE(c); const req = c.req||{}; const method = c.method||{};
-    const elements = ["C","Mn","Si","S","P","Cr","Mo","Ni","Cu","V","Nb","Ti","Al"];
+    const tests = ensureChemicalTests(s, 4);
+    const first = tests[0]||{};
     chemBlock = `
     <div class="report-section-title">Discipline : Chemical, Group : Metals &amp; Alloys</div>
-    ${testBlockHeader("Spectro Chemical Analysis", "", c.testDate, c.equipmentId)}
-    <table>
-      <thead><tr><th>Element</th><th>Result</th><th>Requirement</th><th>Test method</th></tr></thead>
-      <tbody>
-        ${elements.filter(e=>c[e]!==undefined && c[e]!=="").map(e=>{
-          const pass = checkConform(num(c[e]), req[e]);
-          return `<tr><td>% ${e}</td><td>${esc(c[e])}</td><td>${esc(req[e])||"—"}${pass===true?' <span style="color:var(--teal);font-weight:600;">✓</span>':pass===false?' <span style="color:var(--red);font-weight:700;">✕</span>':''}</td><td>${esc(method[e])||"—"}</td></tr>`;
-        }).join("")}
-        <tr><td><b>Carbon Equivalent (IIW)</b></td><td><b>${fmt(CE,3)}</b></td><td>${esc(req.CE)||"—"}${(()=>{const p=checkConform(CE,req.CE);return p===true?' <span style="color:var(--teal);font-weight:600;">✓</span>':p===false?' <span style="color:var(--red);font-weight:700;">✕</span>':'';})()}</td><td>${esc(method.CE)||"—"}</td></tr>
-      </tbody>
-    </table>`;
+    ${testBlockHeader("Spectro Chemical Analysis"+(tests.length>1?" — "+tests.length+" samples":""), "", first.testDate, first.equipmentId)}
+    ${chemicalComparisonTable(s, false)}`;
   }
 
   /* ---- HIC (classified under Corrosion) ---- */
@@ -4173,6 +4498,11 @@ function buildWordHTML(s, mode){
     const tMethod = combineMethods(s.mechanical.tensileMethod, s.mechanical.tensileMethodsExtra) || "—";
     if(s.mechanical.specimens.length===0){
       mechParts.push(wordTestBlockHeader("Tensile Test", tMethod, s.mechanical.testDate, s.mechanical.tensileEquipmentId) + `<p style="font-size:9.5pt;color:#555;">No specimen data recorded</p>`);
+    } else if(s.mechanical.specimens.length>1){
+      s.mechanical.specimens.forEach((sp,i)=>{
+        if(sp.hardness) embeddedHardnessFromTensile.push({label: `Specimen ${i+1}`, scale: sp.hardnessScale||"HB", avg: calcSpecimen(sp).avgHardness, req: sp.hardnessReq});
+      });
+      mechParts.push(wordTestBlockHeader("Tensile Test — "+s.mechanical.specimens.length+" specimens", tMethod, s.mechanical.testDate, s.mechanical.tensileEquipmentId) + tensileComparisonTable(s, true));
     } else {
       s.mechanical.specimens.forEach((sp,i)=>{
         const c = calcSpecimen(sp);
@@ -4185,9 +4515,8 @@ function buildWordHTML(s, mode){
           ["Elongation", c.elong!==null?fmt(c.elong,1)+" %":"—", sp.elongReq||"—", c.elong],
           ["Reduction of area", c.RA!==null?fmt(c.RA,1)+" %":"—", sp.raReq||"—", c.RA],
         ];
-        if(sp.hardness) embeddedHardnessFromTensile.push({label: s.mechanical.specimens.length>1?`Specimen ${i+1}`:"", scale: sp.hardnessScale||"HB", avg: c.avgHardness, req: sp.hardnessReq});
-        const label = s.mechanical.specimens.length>1 ? `Tensile Test — Specimen ${i+1}` : "Tensile Test";
-        mechParts.push(wordTestBlockHeader(label, tMethod, s.mechanical.testDate, s.mechanical.tensileEquipmentId) + wVertTable(rows));
+        if(sp.hardness) embeddedHardnessFromTensile.push({label: "", scale: sp.hardnessScale||"HB", avg: c.avgHardness, req: sp.hardnessReq});
+        mechParts.push(wordTestBlockHeader("Tensile Test", tMethod, s.mechanical.testDate, s.mechanical.tensileEquipmentId) + wVertTable(rows));
       });
     }
   }
@@ -4252,21 +4581,12 @@ function buildWordHTML(s, mode){
   }
 
   if(s.testsRequested.chemical){
-    const c = s.chemical; const CE = calcCE(c); const req = c.req||{}; const method = c.method||{};
-    const elements = ["C","Mn","Si","S","P","Cr","Mo","Ni","Cu","V","Nb","Ti","Al"];
-    const rows = elements.filter(e=>c[e]!==undefined && c[e]!=="").map(e=>{
-      const pass = checkConform(num(c[e]), req[e]);
-      return `<tr>${td("% "+e)}${td(esc(c[e]))}${td((esc(req[e])||"—")+(pass===true?' <b style="color:#2f6f63;">PASS</b>':pass===false?' <b style="color:#a8493f;">FAIL</b>':''))}${td(esc(method[e])||"—")}</tr>`;
-    }).join("");
-    const cePass = checkConform(CE, req.CE);
+    const tests = ensureChemicalTests(s, 4);
+    const first = tests[0]||{};
     chem = sectionTitle("Discipline : Chemical, Group : Metals & Alloys")
-      + wordTestBlockHeader("Spectro Chemical Analysis", "", c.testDate, c.equipmentId) + `
-      <table style="border-collapse:collapse;width:100%;margin-bottom:8px;">
-        <tr>${th("Element")}${th("Result")}${th("Requirement")}${th("Test method")}</tr>
-        ${rows}
-        <tr>${td("<b>Carbon Equivalent (IIW)</b>")}${td("<b>"+fmt(CE,3)+"</b>")}${td((esc(req.CE)||"—")+(cePass===true?' <b style="color:#2f6f63;">PASS</b>':cePass===false?' <b style="color:#a8493f;">FAIL</b>':''))}${td(esc(method.CE)||"—")}</tr>
-      </table>
-      <p style="font-size:8.5pt;color:#555;">CE = C + Mn/6 + (Cr+Mo+V)/5 + (Ni+Cu)/15</p>`;
+      + wordTestBlockHeader("Spectro Chemical Analysis"+(tests.length>1?" — "+tests.length+" samples":""), "", first.testDate, first.equipmentId)
+      + chemicalComparisonTable(s, true)
+      + `<p style="font-size:8.5pt;color:#555;">CE = C + Mn/6 + (Cr+Mo+V)/5 + (Ni+Cu)/15</p>`;
   }
   if(s.testsRequested.hic){
     const avg = calcHICAvg(s.hic.plates);
@@ -4670,7 +4990,8 @@ function attachSampleDetailHandlers(){
     });
     const addBtn = document.getElementById("mech-add");
     if(addBtn) addBtn.onclick = async ()=>{
-      s.mechanical.specimens.push({id:uid(),areaType:"round",
+      const sharedType = s.mechanical.sharedAreaType || (s.mechanical.specimens[0] && s.mechanical.specimens[0].areaType) || "round";
+      s.mechanical.specimens.push({id:uid(),areaType:sharedType,
         diameter:"",finalDiameter:"",
         outerDia:"",innerDia:"",finalOuterDia:"",finalInnerDia:"",
         width:"",thickness:"",finalWidth:"",finalThickness:"",
@@ -4679,6 +5000,19 @@ function attachSampleDetailHandlers(){
         yieldReq:"",utsReq:"",elongReq:"",raReq:"",hardnessReq:""});
       await saveDB(); render();
     };
+    const sharedTypeSel = document.getElementById("mech-shared-areatype");
+    if(sharedTypeSel) sharedTypeSel.addEventListener("change", async ()=>{
+      s.mechanical.sharedAreaType = sharedTypeSel.value;
+      s.mechanical.specimens.forEach(sp=>{ sp.areaType = sharedTypeSel.value; });
+      await saveDB(); render();
+    });
+    document.querySelectorAll("[data-spec-req-all]").forEach(el=>{
+      el.addEventListener("change", async ()=>{
+        const field = el.getAttribute("data-spec-req-all");
+        s.mechanical.specimens.forEach(sp=>{ sp[field] = el.value; });
+        await saveDB(); render();
+      });
+    });
     document.querySelectorAll("[data-spec-del]").forEach(el=>{
       el.addEventListener("click", async ()=>{
         const id = el.getAttribute("data-spec-del");
@@ -4708,6 +5042,26 @@ function attachSampleDetailHandlers(){
   if(activeSampleTab==="chemical"){
     if(!s.chemical.req) s.chemical.req = {};
     if(!s.chemical.method) s.chemical.method = {};
+    document.querySelectorAll("[data-chemtest-field]").forEach(el=>{
+      el.addEventListener("change", ()=>{
+        const t = ensureChemicalTests(s).find(x=>x.id===el.getAttribute("data-chemtest-id"));
+        if(t) t[el.getAttribute("data-chemtest-field")] = el.value;
+      });
+    });
+    const chemAddBtn = document.getElementById("chem-add-sample");
+    if(chemAddBtn) chemAddBtn.onclick = async ()=>{
+      ensureChemicalTests(s).push(blankChemTest());
+      await saveDB(); render();
+    };
+    document.querySelectorAll("[data-chemtest-del]").forEach(el=>{
+      el.addEventListener("click", async ()=>{
+        const id = el.getAttribute("data-chemtest-del");
+        if(confirm("Remove this sample's chemical results?")){
+          s.chemical.tests = ensureChemicalTests(s).filter(t=>t.id!==id);
+          await saveDB(); render();
+        }
+      });
+    });
     document.querySelectorAll("[data-chem-field]").forEach(el=>{
       el.addEventListener("change", ()=>{ s.chemical[el.getAttribute("data-chem-field")] = el.value; });
     });
@@ -4752,6 +5106,8 @@ function attachSampleDetailHandlers(){
 
   if(["corrG28","corrG48","corrA262B","corrA262E"].includes(activeSampleTab)){
     if(!s.corrosionTests) s.corrosionTests = [];
+    const corrKeyToTemplate = {corrG28:"G28", corrG48:"G48A", corrA262B:"A262B", corrA262E:"A262E"};
+    const templateKey = corrKeyToTemplate[activeSampleTab];
     const addBtn = document.getElementById("corr-add");
     if(addBtn) addBtn.onclick = async ()=>{
       const key = addBtn.getAttribute("data-corr-template");
@@ -4772,6 +5128,21 @@ function attachSampleDetailHandlers(){
         const t = s.corrosionTests.find(x=>x.id===id);
         if(t){ t.values[field] = el.value; await saveDB(); render(); }
       });
+    });
+    const reqAll = document.querySelector("[data-corrtest-req-all]");
+    if(reqAll) reqAll.addEventListener("change", async ()=>{
+      s.corrosionTests.filter(t=>t.template===templateKey).forEach(t=>{ t.values.requirement = reqAll.value; });
+      await saveDB(); render();
+    });
+    const dateAll = document.querySelector("[data-corrtest-date-all]");
+    if(dateAll) dateAll.addEventListener("change", async ()=>{
+      s.corrosionTests.filter(t=>t.template===templateKey).forEach(t=>{ t.values.testDate = dateAll.value; });
+      await saveDB(); render();
+    });
+    const equipAll = document.querySelector("[data-corrtest-equip-all]");
+    if(equipAll) equipAll.addEventListener("change", async ()=>{
+      s.corrosionTests.filter(t=>t.template===templateKey).forEach(t=>{ t.values.equipmentId = equipAll.value; });
+      await saveDB(); render();
     });
   }
 
