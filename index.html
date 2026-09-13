@@ -1598,6 +1598,7 @@ function renderTensileEntryTable(s){
         ${calcRow("Yield strength (MPa)", c=>c.YS, "yieldReq", 2)}
         ${calcRow("Tensile strength (MPa)", c=>c.UTS, "utsReq", 2)}
         ${calcRow("Elongation (%)", c=>c.elong, "elongReq", 1)}
+        <tr><td>Fracture location</td>${specs.map(sp=>`<td><select data-spec-field="fractureLocation" data-spec-id="${sp.id}" style="width:100%;"><option value="" ${!sp.fractureLocation?"selected":""}>—</option><option value="W.G.L." ${sp.fractureLocation==="W.G.L."?"selected":""}>W.G.L. (within gauge length)</option><option value="Outside G.L." ${sp.fractureLocation==="Outside G.L."?"selected":""}>Outside gauge length</option></select></td>`).join("")}<td></td></tr>
         ${calcRow("Reduction of area (%)", c=>c.RA, "raReq", 1)}
         ${calcRow("Avg. hardness", c=>c.avgHardness, "hardnessReq", 1)}
       </tbody>
@@ -3849,6 +3850,7 @@ function buildSampleInfoPairs(s, mode){
   const isRecord = mode === "record";
   const pairs = [];
   pairs.push([isRecord?"Record No.":"Report No.", esc(s.labNumber)]);
+  if(!isRecord) pairs.push(["Date of Issue", esc(s.reportDate)||todayISO()]);
   if(s.clientName) pairs.push(["Client Name", esc(s.clientName)]);
   if(s.customerRef || s.customerRefDate) pairs.push(["Party Ref &amp; Date", (esc(s.customerRef)||"—") + (s.customerRefDate?" &nbsp; "+esc(s.customerRefDate):"")]);
   pairs.push(["Sample Description", esc(s.sampleDescription)||"—"]);
@@ -4122,6 +4124,7 @@ function tensileComparisonTable(s, forWord){
   rows.push({label:"Yield strength (MPa)", values: calcs.map(c=>c.YS!==null?fmt(c.YS):"—"), req: specs[0].yieldReq||"—", raw: calcs.map(c=>c.YS)});
   rows.push({label:"Tensile strength (MPa)", values: calcs.map(c=>c.UTS!==null?fmt(c.UTS):"—"), req: specs[0].utsReq||"—", raw: calcs.map(c=>c.UTS)});
   rows.push({label:"Elongation (%)", values: calcs.map(c=>c.elong!==null?fmt(c.elong,1):"—"), req: specs[0].elongReq||"—", raw: calcs.map(c=>c.elong)});
+  rows.push({label:"Fracture location", values: specs.map(sp=>esc(sp.fractureLocation)||"—"), req:""});
   rows.push({label:"Reduction of area (%)", values: calcs.map(c=>c.RA!==null?fmt(c.RA,1):"—"), req: specs[0].raReq||"—", raw: calcs.map(c=>c.RA)});
   // Note: hardness is intentionally NOT a row here — it prints under its own separate
   // "Hardness Test" heading (see embeddedHardnessFromTensile in the report builder),
@@ -4155,7 +4158,7 @@ function tensileComparisonTable(s, forWord){
     </tbody>
   </table>`;
 }
-function tensileRawRows(sp){
+function tensileDimensionRows(sp){
   const rows = [];
   const at = sp.areaType || "round";
   if(at === "round"){
@@ -4175,11 +4178,18 @@ function tensileRawRows(sp){
     rows.push(["Area, original (manual, mm²)", esc(sp.area0Manual)||"—"]);
     rows.push(["Area, final (manual, mm²)", esc(sp.areaFManual)||"—"]);
   }
-  rows.push(["Gauge length, original (mm)", esc(sp.gaugeLength)||"—"]);
-  rows.push(["Gauge length, final (mm)", esc(sp.finalGaugeLength)||"—"]);
-  rows.push(["Yield load (N)", esc(sp.yieldLoad)||"—"]);
-  rows.push(["Ultimate load (N)", esc(sp.ultimateLoad)||"—"]);
   return rows;
+}
+function tensileGaugeLoadRows(sp){
+  return [
+    ["Gauge length, original (mm)", esc(sp.gaugeLength)||"—"],
+    ["Gauge length, final (mm)", esc(sp.finalGaugeLength)||"—"],
+    ["Yield load (N)", esc(sp.yieldLoad)||"—"],
+    ["Ultimate load (N)", esc(sp.ultimateLoad)||"—"],
+  ];
+}
+function tensileRawRows(sp){
+  return [...tensileDimensionRows(sp), ...tensileGaugeLoadRows(sp)];
 }
 function renderReport(mode){
   mode = mode || "report";
@@ -4213,11 +4223,13 @@ function renderReport(mode){
         const c = calcSpecimen(sp);
         const rows = [
           ["Cross-section", areaTypeLabel(sp.areaType)],
-          ...tensileRawRows(sp),
-          ["Area (orig.)", c.area0!==null?fmt(c.area0)+" mm²":"—"],
+          ...tensileDimensionRows(sp),
+          ["Cross-sectional area, orig. (mm²)", c.area0!==null?fmt(c.area0):"—"],
+          ...tensileGaugeLoadRows(sp),
           ["Yield strength", c.YS!==null?fmt(c.YS)+" MPa":"—", sp.yieldReq||"—", c.YS],
           ["Tensile strength (UTS)", c.UTS!==null?fmt(c.UTS)+" MPa":"—", sp.utsReq||"—", c.UTS],
           ["Elongation", c.elong!==null?fmt(c.elong,1)+" %":"—", sp.elongReq||"—", c.elong],
+          ["Fracture location", esc(sp.fractureLocation)||"—"],
           ["Reduction of area", c.RA!==null?fmt(c.RA,1)+" %":"—", sp.raReq||"—", c.RA],
         ];
         if(sp.hardness) embeddedHardnessFromTensile.push({label: "", scale: sp.hardnessScale||"HB", avg: c.avgHardness, req: sp.hardnessReq});
@@ -4386,6 +4398,7 @@ function renderReport(mode){
     }).join("") || `<div class="report-section-title">Discipline : Other</div><table><tbody><tr><td style="color:var(--ink-soft);">No additional tests recorded</td></tr></tbody></table>`;
   }
 
+  if(!isRecord && !s.reportDate){ s.reportDate = todayISO(); saveDB(); }
   const overallConf = sampleOverallConformance(s);
   return `
   <div class="topline no-print">
@@ -4430,6 +4443,15 @@ function renderReport(mode){
       rounded off appropriately and compared directly with the specification, without a formal guard-band for measurement uncertainty, unless stated otherwise.
     </div>
     <div class="report-disclaimer">
+      <b>Measurement Uncertainty:</b> Estimated measurement uncertainty is not included in the reported results, unless specifically requested by the customer
+      and stated against the relevant result.
+    </div>
+    <div class="report-disclaimer">
+      <b>Opinions &amp; Interpretation:</b> Pass/Fail statements shown against individual results are the laboratory's opinion, formed by comparing the
+      measured result with the stated requirement per the Decision Rule above.
+    </div>
+    ${!isRecord ? `<div class="report-disclaimer"><b>Page:</b> 1 of 1</div>` : ""}
+    <div class="report-disclaimer">
       <b>Disclaimer:</b> 1. Sample drawn by customer, and the test results apply only to the sample as received. 2. The results relate solely to the tested item.
       No endorsement of the product is inferred or implied. This certificate shall not be reproduced, in whole or in part, without prior written approval.
       3. The total liability of the laboratory is limited to the invoiced amount for the testing services provided. 4. Any complaints regarding this test report
@@ -4438,8 +4460,8 @@ function renderReport(mode){
     <div class="report-endline">. . . . . . . . . . . . ${isRecord?"END OF RECORD":"END OF REPORT"} . . . . . . . . . . . .</div>
 
     <div class="report-sign">
-      <div class="sign-line">Checked By</div>
-      <div class="sign-line">Reviewed &amp; Authorised By</div>
+      <div class="sign-line">Checked By<br><span style="font-size:9px;">Name: ______________&nbsp;&nbsp;Date: __________</span></div>
+      <div class="sign-line">Reviewed &amp; Authorised By<br><span style="font-size:9px;">Name: ______________&nbsp;&nbsp;Date: __________</span></div>
     </div>
   </div>`;
 }
@@ -4504,11 +4526,13 @@ function buildWordHTML(s, mode){
         const c = calcSpecimen(sp);
         const rows = [
           ["Cross-section", areaTypeLabel(sp.areaType)],
-          ...tensileRawRows(sp),
-          ["Area (orig.)", c.area0!==null?fmt(c.area0)+" mm²":"—"],
+          ...tensileDimensionRows(sp),
+          ["Cross-sectional area, orig. (mm²)", c.area0!==null?fmt(c.area0):"—"],
+          ...tensileGaugeLoadRows(sp),
           ["Yield strength", c.YS!==null?fmt(c.YS)+" MPa":"—", sp.yieldReq||"—", c.YS],
           ["Tensile strength (UTS)", c.UTS!==null?fmt(c.UTS)+" MPa":"—", sp.utsReq||"—", c.UTS],
           ["Elongation", c.elong!==null?fmt(c.elong,1)+" %":"—", sp.elongReq||"—", c.elong],
+          ["Fracture location", esc(sp.fractureLocation)||"—"],
           ["Reduction of area", c.RA!==null?fmt(c.RA,1)+" %":"—", sp.raReq||"—", c.RA],
         ];
         if(sp.hardness) embeddedHardnessFromTensile.push({label: "", scale: sp.hardnessScale||"HB", avg: c.avgHardness, req: sp.hardnessReq});
@@ -4716,6 +4740,15 @@ function buildWordHTML(s, mode){
       measurement uncertainty, unless stated otherwise.
     </p>
     <p style="font-size:7.5pt;line-height:1.5;color:#666;margin-top:8px;">
+      <b style="color:#333;">Measurement Uncertainty:</b> Estimated measurement uncertainty is not included in the reported results, unless
+      specifically requested by the customer and stated against the relevant result.
+    </p>
+    <p style="font-size:7.5pt;line-height:1.5;color:#666;margin-top:8px;">
+      <b style="color:#333;">Opinions &amp; Interpretation:</b> Pass/Fail statements shown against individual results are the laboratory's opinion,
+      formed by comparing the measured result with the stated requirement per the Decision Rule above.
+    </p>
+    ${!isRecord ? `<p style="font-size:7.5pt;color:#666;margin-top:8px;"><b style="color:#333;">Page:</b> 1 of 1</p>` : ""}
+    <p style="font-size:7.5pt;line-height:1.5;color:#666;margin-top:8px;">
       <b style="color:#333;">Disclaimer:</b> 1. Sample drawn by customer, and the test results apply only to the sample as received.
       2. The results relate solely to the tested item. No endorsement of the product is inferred or implied. This certificate shall not be
       reproduced, in whole or in part, without prior written approval. 3. The total liability of the laboratory is limited to the invoiced
@@ -4727,10 +4760,12 @@ function buildWordHTML(s, mode){
     <table style="width:100%;border-collapse:collapse;border:none;margin-top:30px;">
       <tr>
         <td style="border:none;width:50%;">
-          <div style="border-top:1px solid #182228;width:180px;padding-top:4px;font-size:9pt;color:#555;">Checked By</div>
+          <div style="border-top:1px solid #182228;width:220px;padding-top:4px;font-size:9pt;color:#555;">Checked By</div>
+          <div style="font-size:8pt;color:#555;margin-top:2px;">Name: ______________&nbsp;&nbsp;Date: __________</div>
         </td>
         <td style="border:none;width:50%;">
-          <div style="border-top:1px solid #182228;width:180px;padding-top:4px;font-size:9pt;color:#555;">Reviewed &amp; Authorised By</div>
+          <div style="border-top:1px solid #182228;width:220px;padding-top:4px;font-size:9pt;color:#555;">Reviewed &amp; Authorised By</div>
+          <div style="font-size:8pt;color:#555;margin-top:2px;">Name: ______________&nbsp;&nbsp;Date: __________</div>
         </td>
       </tr>
     </table>
