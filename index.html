@@ -2251,6 +2251,7 @@ function renderQuickWizard(){
   if(!wizardData) wizardData = {
     customerName:"", specId:"", materialGrade:"",
     testsRequested:{mechanical:false, chemical:false, hic:false, metallography:false, flattening:false, hardnessTest:false, bendTest:false, corrG28:false, corrG48:false, corrA262B:false, corrA262E:false, additionalTests:false},
+    tensileSpecimens: [0,1,2,3].map(()=>({areaType:"round", diameter:"", width:"", thickness:"", outerDia:"", innerDia:""})),
   };
   const wd = wizardData;
   const steps = ["Customer","Grade","Testing","Generate"];
@@ -2294,7 +2295,30 @@ function renderQuickWizard(){
       <label class="checkline"><input type="checkbox" id="wiz-t-additionalTests" ${wd.testsRequested.additionalTests?"checked":""}> Other / additional tests</label>
     </div>
     ${wd.testsRequested.mechanical ? `
-    <div class="field" style="margin-top:14px;max-width:260px;"><label>Test piece diameter (mm) — for auto-calculated results</label><input type="number" step="any" id="wiz-tensile-dia" value="${esc(wd.tensileDiameter)}"></div>` : ""}`;
+    <div class="subhead" style="margin-top:14px;">Test pieces — up to 4, for auto-calculated results</div>
+    <div class="grid grid-2">
+      ${[0,1,2,3].map(i=>{
+        const sp = wd.tensileSpecimens[i];
+        const t = sp.areaType||"round";
+        return `<div class="specimen-row">
+          <div class="row-head"><span class="tag">Specimen ${i+1}</span></div>
+          <div class="field"><label>Cross-section type</label>
+            <select data-wiz-sp-field="areaType" data-wiz-sp-index="${i}">
+              ${AREA_TYPES.filter(a=>a.id!=="manual").map(a=>`<option value="${a.id}" ${a.id===t?"selected":""}>${esc(a.label)}</option>`).join("")}
+            </select>
+          </div>
+          ${t==="round" ? `<div class="field"><label>Diameter (mm)</label><input type="number" step="any" data-wiz-sp-field="diameter" data-wiz-sp-index="${i}" value="${esc(sp.diameter)}"></div>` : ""}
+          ${t==="flat" ? `<div class="grid grid-2">
+            <div class="field"><label>Width (mm)</label><input type="number" step="any" data-wiz-sp-field="width" data-wiz-sp-index="${i}" value="${esc(sp.width)}"></div>
+            <div class="field"><label>Thickness (mm)</label><input type="number" step="any" data-wiz-sp-field="thickness" data-wiz-sp-index="${i}" value="${esc(sp.thickness)}"></div>
+          </div>` : ""}
+          ${t==="hollow" ? `<div class="grid grid-2">
+            <div class="field"><label>Outer dia. (mm)</label><input type="number" step="any" data-wiz-sp-field="outerDia" data-wiz-sp-index="${i}" value="${esc(sp.outerDia)}"></div>
+            <div class="field"><label>Inner dia. (mm)</label><input type="number" step="any" data-wiz-sp-field="innerDia" data-wiz-sp-index="${i}" value="${esc(sp.innerDia)}"></div>
+          </div>` : ""}
+        </div>`;
+      }).join("")}
+    </div>` : ""}`;
   } else if(wizardStep===4){
     const specName = wd.specId && DB.specs[wd.specId] ? DB.specs[wd.specId].name : "— none —";
     const testsOn = Object.keys(wd.testsRequested).filter(k=>wd.testsRequested[k]);
@@ -2357,6 +2381,13 @@ function attachQuickWizardHandlers(){
     });
     const diaEl = document.getElementById("wiz-tensile-dia");
     if(diaEl) diaEl.addEventListener("change", ()=>{ wd.tensileDiameter = diaEl.value; });
+    document.querySelectorAll("[data-wiz-sp-field]").forEach(el=>{
+      el.addEventListener("change", ()=>{
+        const idx = parseInt(el.getAttribute("data-wiz-sp-index"),10);
+        wd.tensileSpecimens[idx][el.getAttribute("data-wiz-sp-field")] = el.value;
+        if(el.getAttribute("data-wiz-sp-field")==="areaType") render();
+      });
+    });
   }
   const backBtn = document.getElementById("wiz-back");
   if(backBtn) backBtn.onclick = ()=>{ wizardStep = Math.max(1, wizardStep-1); render(); };
@@ -2371,15 +2402,26 @@ function attachQuickWizardHandlers(){
     s.specId = wd.specId || null;
     s.testsRequested = {...s.testsRequested, ...wd.testsRequested};
     if(wd.specId && DB.specs[wd.specId]) applySpecToSample(s, DB.specs[wd.specId]);
-    if(s.testsRequested.mechanical && wd.tensileDiameter){
-      const sp = blankTensileSpecimen("round");
-      sp.diameter = wd.tensileDiameter;
-      if(DB.specs[wd.specId]){
-        const spec = DB.specs[wd.specId];
-        sp.yieldReq = spec.yieldReq; sp.utsReq = spec.utsReq; sp.elongReq = spec.elongReq; sp.raReq = spec.raReq;
+    if(s.testsRequested.mechanical){
+      const filledWizSpecs = wd.tensileSpecimens.filter(ws=>{
+        if(ws.areaType==="flat") return ws.width && ws.thickness;
+        if(ws.areaType==="hollow") return ws.outerDia && ws.innerDia;
+        return ws.diameter;
+      });
+      if(filledWizSpecs.length>0){
+        const specs = filledWizSpecs.map(ws=>{
+          const sp = blankTensileSpecimen(ws.areaType);
+          sp.diameter = ws.diameter; sp.width = ws.width; sp.thickness = ws.thickness;
+          sp.outerDia = ws.outerDia; sp.innerDia = ws.innerDia;
+          if(DB.specs[wd.specId]){
+            const spec = DB.specs[wd.specId];
+            sp.yieldReq = spec.yieldReq; sp.utsReq = spec.utsReq; sp.elongReq = spec.elongReq; sp.raReq = spec.raReq;
+          }
+          autoGenerateTensileResult(sp, sp);
+          return sp;
+        });
+        s.mechanical.specimens = specs;
       }
-      autoGenerateTensileResult(sp, sp);
-      s.mechanical.specimens = [sp];
     }
     if(s.testsRequested.chemical && DB.specs[wd.specId]){
       const spec = DB.specs[wd.specId];
