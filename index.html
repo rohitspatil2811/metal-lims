@@ -1687,8 +1687,12 @@ function renderSpecimenRow(sp,i){
   </div>`;
 }
 
+function chemTestHasData(t){
+  return CHEM_ELEMENTS.some(el=>t[el]!==undefined && t[el]!=="");
+}
 function chemicalComparisonTable(s, forWord){
-  const tests = ensureChemicalTests(s, 4);
+  const tests = ensureChemicalTests(s, 4).filter(chemTestHasData);
+  if(tests.length===0) return `<table><tbody><tr><td style="color:var(--ink-soft);">No data recorded</td></tr></tbody></table>`;
   const req = s.chemical.req || {};
   const rows = CHEM_ELEMENTS.map(el=>({
     label: "% "+el,
@@ -4110,8 +4114,11 @@ function tensileRawFieldsForType(areaType){
 /* Transposed comparison table: one column per specimen (at least 4 recommended),
    properties as rows, Requirement as the final column — the format for reporting
    multiple test pieces from one sample side by side. */
+function specimenHasData(sp){
+  return ["diameter","finalDiameter","outerDia","innerDia","finalOuterDia","finalInnerDia","width","thickness","finalWidth","finalThickness","area0Manual","areaFManual","gaugeLength","finalGaugeLength","yieldLoad","ultimateLoad","hardness"].some(f=>sp[f]!==undefined && sp[f]!=="");
+}
 function tensileComparisonTable(s, forWord){
-  const specs = s.mechanical.specimens||[];
+  const specs = (s.mechanical.specimens||[]).filter(specimenHasData);
   if(specs.length===0) return "";
   const calcs = specs.map(calcSpecimen);
   const areaTypesUsed = Array.from(new Set(specs.map(sp=>sp.areaType||"round")));
@@ -4206,15 +4213,16 @@ function renderReport(mode){
   if(s.testsRequested.mechanical){
     const areaTypeLabel = (t)=> (AREA_TYPES.find(a=>a.id===(t||"round"))||{}).label || "Round";
     const tMethod = combineMethods(s.mechanical.tensileMethod, s.mechanical.tensileMethodsExtra) || "—";
-    if(s.mechanical.specimens.length===0){
+    const filledSpecimens = s.mechanical.specimens.filter(specimenHasData);
+    if(filledSpecimens.length===0){
       mechParts.push(testBlockHeader("Tensile Test", tMethod, s.mechanical.testDate, s.mechanical.tensileEquipmentId) + `<table><tbody><tr><td style="color:var(--ink-soft);">No specimen data recorded</td></tr></tbody></table>`);
-    } else if(s.mechanical.specimens.length>1){
-      s.mechanical.specimens.forEach((sp,i)=>{
+    } else if(filledSpecimens.length>1){
+      filledSpecimens.forEach((sp,i)=>{
         if(sp.hardness) embeddedHardnessFromTensile.push({label: `Specimen ${i+1}`, scale: sp.hardnessScale||"HB", avg: calcSpecimen(sp).avgHardness, req: sp.hardnessReq});
       });
-      mechParts.push(testBlockHeader("Tensile Test — "+s.mechanical.specimens.length+" specimens", tMethod, s.mechanical.testDate, s.mechanical.tensileEquipmentId) + tensileComparisonTable(s, false));
+      mechParts.push(testBlockHeader("Tensile Test — "+filledSpecimens.length+" specimens", tMethod, s.mechanical.testDate, s.mechanical.tensileEquipmentId) + tensileComparisonTable(s, false));
     } else {
-      s.mechanical.specimens.forEach((sp,i)=>{
+      filledSpecimens.forEach((sp,i)=>{
         const c = calcSpecimen(sp);
         const rows = [
           ["Cross-section", areaTypeLabel(sp.areaType)],
@@ -4292,7 +4300,7 @@ function renderReport(mode){
 
   /* ---- Chemical ---- */
   if(s.testsRequested.chemical){
-    const tests = ensureChemicalTests(s, 4);
+    const tests = ensureChemicalTests(s, 4).filter(chemTestHasData);
     const first = tests[0]||{};
     chemBlock = `
     <div class="report-section-title">Discipline : Chemical, Group : Metals &amp; Alloys</div>
@@ -4496,15 +4504,16 @@ function buildWordHTML(s, mode){
   if(s.testsRequested.mechanical){
     const areaTypeLabel = (t)=> (AREA_TYPES.find(a=>a.id===(t||"round"))||{}).label || "Round";
     const tMethod = combineMethods(s.mechanical.tensileMethod, s.mechanical.tensileMethodsExtra) || "—";
-    if(s.mechanical.specimens.length===0){
+    const filledSpecimensW = s.mechanical.specimens.filter(specimenHasData);
+    if(filledSpecimensW.length===0){
       mechParts.push(wordTestBlockHeader("Tensile Test", tMethod, s.mechanical.testDate, s.mechanical.tensileEquipmentId) + `<p style="font-size:9.5pt;color:#555;">No specimen data recorded</p>`);
-    } else if(s.mechanical.specimens.length>1){
-      s.mechanical.specimens.forEach((sp,i)=>{
+    } else if(filledSpecimensW.length>1){
+      filledSpecimensW.forEach((sp,i)=>{
         if(sp.hardness) embeddedHardnessFromTensile.push({label: `Specimen ${i+1}`, scale: sp.hardnessScale||"HB", avg: calcSpecimen(sp).avgHardness, req: sp.hardnessReq});
       });
-      mechParts.push(wordTestBlockHeader("Tensile Test — "+s.mechanical.specimens.length+" specimens", tMethod, s.mechanical.testDate, s.mechanical.tensileEquipmentId) + tensileComparisonTable(s, true));
+      mechParts.push(wordTestBlockHeader("Tensile Test — "+filledSpecimensW.length+" specimens", tMethod, s.mechanical.testDate, s.mechanical.tensileEquipmentId) + tensileComparisonTable(s, true));
     } else {
-      s.mechanical.specimens.forEach((sp,i)=>{
+      filledSpecimensW.forEach((sp,i)=>{
         const c = calcSpecimen(sp);
         const rows = [
           ["Cross-section", areaTypeLabel(sp.areaType)],
@@ -4581,7 +4590,7 @@ function buildWordHTML(s, mode){
   }
 
   if(s.testsRequested.chemical){
-    const tests = ensureChemicalTests(s, 4);
+    const tests = ensureChemicalTests(s, 4).filter(chemTestHasData);
     const first = tests[0]||{};
     chem = sectionTitle("Discipline : Chemical, Group : Metals & Alloys")
       + wordTestBlockHeader("Spectro Chemical Analysis"+(tests.length>1?" — "+tests.length+" samples":""), "", first.testDate, first.equipmentId)
