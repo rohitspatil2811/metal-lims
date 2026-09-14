@@ -324,7 +324,9 @@ let activeInvoiceId = null;
 let activeSampleTab = "overview";
 let wizardStep = 1;
 let wizardData = null;
+let autoGenSpecimens = [0,1,2,3].map(()=>({areaType:"round", diameter:"", width:"", thickness:"", outerDia:"", innerDia:""}));
 let dashboardFilter = "";
+let sidebarSearch = "";
 let flash = null; // {type,msg}
 let pendingImportSpecs = null;
 
@@ -1120,19 +1122,19 @@ function attachLoginHandlers(){
 /* ===================== SIDEBAR ===================== */
 function renderSidebar(){
   const items = [
-    {id:"dashboard", label:"Dashboard", tag:"01"},
-    {id:"newSample", label:"New sample", tag:"+"},
-    {id:"specLibrary", label:"Spec library", tag:"03"},
-    {id:"methodLibrary", label:"Method library", tag:"04"},
-    {id:"equipmentLibrary", label:"Equipment library", tag:"05"},
-    {id:"testParamsLibrary", label:"Test parameters", tag:"06"},
+    {id:"dashboard", label:"Dashboard", tag:"01", kw:"samples list overview home"},
+    {id:"newSample", label:"New sample", tag:"+", kw:"add create intake entry"},
+    {id:"specLibrary", label:"Spec library", tag:"03", kw:"specification grade requirement yield tensile elongation ce import excel"},
+    {id:"methodLibrary", label:"Method library", tag:"04", kw:"test method astm standard requirement lines"},
+    {id:"equipmentLibrary", label:"Equipment library", tag:"05", kw:"instrument calibration serial due date utm hardness tester spectrometer"},
+    {id:"testParamsLibrary", label:"Test parameters", tag:"06", kw:"parameter category calculated formula corrosion template ferrite huey hic drift"},
   ];
   if(session.role==="Admin"){
-    items.push({id:"quickWizard", label:"Quick report wizard", tag:"★"});
-    items.push({id:"billing", label:"Billing", tag:"$"});
-    items.push({id:"priceList", label:"Price list", tag:"₹"});
-    items.push({id:"team", label:"Team access", tag:"07"});
-    items.push({id:"settings", label:"Lab settings", tag:"08"});
+    items.push({id:"quickWizard", label:"Quick report wizard", tag:"★", kw:"auto generate fast tensile diameter chemical demo"});
+    items.push({id:"billing", label:"Billing", tag:"$", kw:"invoice gst tax gst rate discount line item"});
+    items.push({id:"priceList", label:"Price list", tag:"₹", kw:"rate charge cost per test"});
+    items.push({id:"team", label:"Team access", tag:"07", kw:"user login password role admin analyst"});
+    items.push({id:"settings", label:"Lab settings", tag:"08", kw:"lab name address backup restore firebase team sync theme"});
   }
   return `
   <div class="sidebar">
@@ -1140,11 +1142,22 @@ function renderSidebar(){
       <div class="brand-mark">MTL / LIMS</div>
       <div class="brand-sub">Metal Test Lab</div>
     </div>
-    ${items.map(it=>`
+    <div style="padding:0 16px 12px 16px;">
+      <input type="text" id="sidebar-search" placeholder="Search features…" value="${esc(sidebarSearch)}" style="width:100%;padding:7px 9px;font-size:12px;background:#212e34;border:1px solid #3a4a52;color:#e9ede9;border-radius:2px;">
+    </div>
+    ${items.filter(it=>{
+      if(!sidebarSearch.trim()) return true;
+      const q = sidebarSearch.trim().toLowerCase();
+      return it.label.toLowerCase().includes(q) || (it.kw||"").includes(q);
+    }).map(it=>`
       <div class="nav-item ${view===it.id?'active':''}" data-nav="${it.id}">
         <span class="nav-tag">${it.tag}</span><span>${esc(it.label)}</span>
       </div>
     `).join("")}
+    ${sidebarSearch.trim() && items.filter(it=>{
+      const q = sidebarSearch.trim().toLowerCase();
+      return it.label.toLowerCase().includes(q) || (it.kw||"").includes(q);
+    }).length===0 ? `<div style="padding:10px 20px;font-size:11.5px;color:#7c8a86;">No matching feature found.</div>` : ""}
     <div class="sidebar-foot">
       <div class="who">Signed in as<br><b>${esc(session.name)}</b></div>
       <div class="role-pill">${esc(session.role)}</div>
@@ -1507,7 +1520,38 @@ function renderOverviewTab(s){
     </div>
     <button class="btn amber" style="margin-top:6px;" id="ov-spec-apply">Apply requirements to this sample</button>
     ${specs.length===0 ? `<div class="hint" style="margin-top:8px;">No specifications in the library yet. <span data-nav="specLibrary" style="cursor:pointer;text-decoration:underline;">Go to Spec library →</span></div>` : ""}
-  </div>`;
+  </div>
+  ${(s.testsRequested.mechanical || s.testsRequested.chemical) ? `
+  <div class="panel">
+    <div class="panel-title"><span>Quick report wizard — auto-generate results for this sample</span></div>
+    <div class="hint" style="margin-bottom:10px;">Fills plausible passing results straight into this sample's Tensile / Chemical tabs, based on the requirements linked above. Existing entered data is left untouched.</div>
+    ${s.testsRequested.mechanical ? `
+    <div class="subhead">Test pieces (leave blank to skip)</div>
+    <div class="grid grid-2">
+      ${[0,1,2,3].map(i=>{
+        const sp = autoGenSpecimens[i];
+        const t = sp.areaType||"round";
+        return `<div class="specimen-row">
+          <div class="row-head"><span class="tag">Specimen ${i+1}</span></div>
+          <div class="field"><label>Cross-section type</label>
+            <select data-autogen-sp-field="areaType" data-autogen-sp-index="${i}">
+              ${AREA_TYPES.filter(a=>a.id!=="manual").map(a=>`<option value="${a.id}" ${a.id===t?"selected":""}>${esc(a.label)}</option>`).join("")}
+            </select>
+          </div>
+          ${t==="round" ? `<div class="field"><label>Diameter (mm)</label><input type="number" step="any" data-autogen-sp-field="diameter" data-autogen-sp-index="${i}" value="${esc(sp.diameter)}"></div>` : ""}
+          ${t==="flat" ? `<div class="grid grid-2">
+            <div class="field"><label>Width (mm)</label><input type="number" step="any" data-autogen-sp-field="width" data-autogen-sp-index="${i}" value="${esc(sp.width)}"></div>
+            <div class="field"><label>Thickness (mm)</label><input type="number" step="any" data-autogen-sp-field="thickness" data-autogen-sp-index="${i}" value="${esc(sp.thickness)}"></div>
+          </div>` : ""}
+          ${t==="hollow" ? `<div class="grid grid-2">
+            <div class="field"><label>Outer dia. (mm)</label><input type="number" step="any" data-autogen-sp-field="outerDia" data-autogen-sp-index="${i}" value="${esc(sp.outerDia)}"></div>
+            <div class="field"><label>Inner dia. (mm)</label><input type="number" step="any" data-autogen-sp-field="innerDia" data-autogen-sp-index="${i}" value="${esc(sp.innerDia)}"></div>
+          </div>` : ""}
+        </div>`;
+      }).join("")}
+    </div>` : ""}
+    <button class="btn amber" style="margin-top:10px;" id="autogen-run">Auto-generate &amp; go to report</button>
+  </div>` : ""}`;
 }
 
 function blankTensileSpecimen(areaType){
@@ -3383,12 +3427,46 @@ function getRateForTestName(name){
   const entry = Object.values(DB.priceList||{}).find(p=>(p.testName||"").trim().toLowerCase()===norm);
   return entry ? entry.rate : "";
 }
+let pendingImportPrices = null;
+function parsePriceWorkbook(arrayBuffer){
+  const wb = XLSX.read(arrayBuffer, {type:"array"});
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, {header:1, defval:""});
+  const out = [];
+  for(let r=1; r<rows.length; r++){
+    const row = rows[r];
+    if(!row || !row[0]) continue;
+    out.push({id:uid(), testName:String(row[0]).trim(), rate:row[1]!==undefined?String(row[1]).trim():"", unit:row[2]?String(row[2]).trim():"per sample", notes:row[3]?String(row[3]).trim():""});
+  }
+  return out;
+}
 function renderPriceList(){
   const entries = Object.values(DB.priceList||{}).sort((a,b)=> (a.testName||"").localeCompare(b.testName||""));
   return `
   <div class="topline">
     <div><div class="page-eyebrow">Finance</div><h1 class="page-title">Price list</h1></div>
     <button class="btn amber" id="price-add">+ Add test rate</button>
+  </div>
+  <div class="panel">
+    <div class="panel-title"><span>Import from Excel</span></div>
+    <div class="hint" style="margin-bottom:10px;">Upload a sheet with columns: Test Name, Rate, Unit (optional), Notes (optional). First row is treated as a header and skipped.</div>
+    <input type="file" id="price-file" accept=".xlsx,.xls,.csv">
+    <button class="btn small" id="price-parse" style="margin-left:8px;">Parse file</button>
+    <div id="price-import-preview" style="margin-top:14px;">
+      ${pendingImportPrices ? `
+        <div class="ok-msg">Found ${pendingImportPrices.length} rate(s) in the file — review below, then import.</div>
+        <div style="overflow-x:auto;max-height:300px;overflow-y:auto;">
+        <table>
+          <thead><tr><th>Test name</th><th>Rate</th><th>Unit</th><th>Notes</th></tr></thead>
+          <tbody>
+            ${pendingImportPrices.map(p=>`<tr><td>${esc(p.testName)}</td><td>${esc(p.rate)||"—"}</td><td>${esc(p.unit)}</td><td>${esc(p.notes)||"—"}</td></tr>`).join("")}
+          </tbody>
+        </table>
+        </div>
+        <button class="btn amber" style="margin-top:10px;" id="price-import-confirm">Import ${pendingImportPrices.length} rate(s)</button>
+        <button class="btn outline" style="margin-top:10px;margin-left:8px;" id="price-import-cancel">Cancel</button>
+      ` : ""}
+    </div>
   </div>
   <div class="panel">
     <div class="hint" style="margin-bottom:10px;">
@@ -3421,6 +3499,48 @@ function attachPriceListHandlers(){
     DB.priceList[p.id] = p;
     await saveDB(); render();
   };
+  const parseBtn = document.getElementById("price-parse");
+  if(parseBtn) parseBtn.onclick = ()=>{
+    const fileInput = document.getElementById("price-file");
+    const file = fileInput && fileInput.files && fileInput.files[0];
+    if(!file){ flash={type:"err",msg:"Choose a file first."}; render(); return; }
+    const reader = new FileReader();
+    reader.onload = (e)=>{
+      try{
+        const data = new Uint8Array(e.target.result);
+        const parsed = parsePriceWorkbook(data);
+        if(!parsed.length){
+          flash={type:"err",msg:"No rows recognized in that file — first column should be the test name."};
+          pendingImportPrices = null;
+          render();
+          return;
+        }
+        pendingImportPrices = parsed;
+        render();
+      }catch(err){
+        flash={type:"err",msg:"Could not read that file: "+err.message};
+        render();
+      }
+    };
+    reader.onerror = ()=>{ flash={type:"err",msg:"Could not read that file."}; render(); };
+    reader.readAsArrayBuffer(file);
+  };
+  const confirmBtn = document.getElementById("price-import-confirm");
+  if(confirmBtn) confirmBtn.onclick = async ()=>{
+    if(!pendingImportPrices) return;
+    pendingImportPrices.forEach(p=>{
+      const existing = Object.values(DB.priceList).find(x=>(x.testName||"").trim().toLowerCase()===(p.testName||"").trim().toLowerCase());
+      if(existing) p.id = existing.id;
+      DB.priceList[p.id] = p;
+    });
+    const n = pendingImportPrices.length;
+    pendingImportPrices = null;
+    await saveDB();
+    flash={type:"ok",msg:`Imported ${n} rate(s).`};
+    render();
+  };
+  const cancelBtn = document.getElementById("price-import-cancel");
+  if(cancelBtn) cancelBtn.onclick = ()=>{ pendingImportPrices = null; render(); };
   document.querySelectorAll("[data-price-del]").forEach(el=>{
     el.addEventListener("click", async ()=>{
       const id = el.getAttribute("data-price-del");
@@ -4888,8 +5008,12 @@ function downloadExcelReport(labNumber, mode){
 /* ===================== EVENT WIRING ===================== */
 function attachViewHandlers(){
   document.querySelectorAll("[data-nav]").forEach(el=>{
-    el.addEventListener("click", ()=>{ view = el.getAttribute("data-nav"); render(); });
+    el.addEventListener("click", ()=>{ view = el.getAttribute("data-nav"); sidebarSearch=""; render(); });
   });
+  const sidebarSearchEl = document.getElementById("sidebar-search");
+  if(sidebarSearchEl){
+    sidebarSearchEl.addEventListener("input", ()=>{ sidebarSearch = sidebarSearchEl.value; renderInPlaceSidebar(); });
+  }
   const logoutBtn = document.getElementById("btn-logout");
   if(logoutBtn) logoutBtn.onclick = ()=>{ session=null; view="dashboard"; render(); };
   const themeSwitcher = document.getElementById("theme-switcher");
@@ -5052,6 +5176,45 @@ function attachSampleDetailHandlers(){
       await saveDB();
       flash={type:"ok",msg:`Requirements applied from "${spec.name}".`};
       render();
+    };
+    document.querySelectorAll("[data-autogen-sp-field]").forEach(el=>{
+      el.addEventListener("change", ()=>{
+        const idx = parseInt(el.getAttribute("data-autogen-sp-index"),10);
+        autoGenSpecimens[idx][el.getAttribute("data-autogen-sp-field")] = el.value;
+        if(el.getAttribute("data-autogen-sp-field")==="areaType") render();
+      });
+    });
+    const autogenRun = document.getElementById("autogen-run");
+    if(autogenRun) autogenRun.onclick = async ()=>{
+      if(s.testsRequested.mechanical){
+        const filled = autoGenSpecimens.filter(ws=>{
+          if(ws.areaType==="flat") return ws.width && ws.thickness;
+          if(ws.areaType==="hollow") return ws.outerDia && ws.innerDia;
+          return ws.diameter;
+        });
+        if(filled.length>0){
+          const specs = filled.map(ws=>{
+            const sp = blankTensileSpecimen(ws.areaType);
+            sp.diameter = ws.diameter; sp.width = ws.width; sp.thickness = ws.thickness;
+            sp.outerDia = ws.outerDia; sp.innerDia = ws.innerDia;
+            const linkedSpec = s.specId ? DB.specs[s.specId] : null;
+            sp.yieldReq = linkedSpec?.yieldReq || s.mechanical.specimens[0]?.yieldReq || "";
+            sp.utsReq = linkedSpec?.utsReq || s.mechanical.specimens[0]?.utsReq || "";
+            sp.elongReq = linkedSpec?.elongReq || s.mechanical.specimens[0]?.elongReq || "";
+            sp.raReq = linkedSpec?.raReq || s.mechanical.specimens[0]?.raReq || "";
+            autoGenerateTensileResult(sp, sp, s.testsRequested.hardnessTest);
+            return sp;
+          });
+          s.mechanical.specimens = specs;
+        }
+      }
+      if(s.testsRequested.chemical){
+        const tests = ensureChemicalTests(s, 1);
+        autoGenerateChemicalResult(tests[0], s.chemical.req||{});
+      }
+      await saveDB();
+      flash={type:"ok",msg:"Auto-generated results filled in."};
+      view="report"; render();
     };
   }
 
@@ -5567,6 +5730,31 @@ function renderInPlaceDashboard(){
   attachViewHandlers();
   const search = document.getElementById("dash-search");
   if(search){ search.focus(); const v=search.value; search.value=""; search.value=v; }
+}
+function renderInPlaceSidebar(){
+  const sidebar = document.querySelector(".sidebar");
+  if(!sidebar) return;
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = renderSidebar();
+  const freshSidebar = wrapper.firstElementChild;
+  sidebar.replaceWith(freshSidebar);
+  document.querySelectorAll("[data-nav]").forEach(el=>{
+    el.addEventListener("click", ()=>{ view = el.getAttribute("data-nav"); sidebarSearch=""; render(); });
+  });
+  const themeSwitcher = document.getElementById("theme-switcher");
+  if(themeSwitcher) themeSwitcher.addEventListener("change", async ()=>{
+    DB.meta.theme = themeSwitcher.value;
+    applyTheme(DB.meta.theme);
+    await saveDB();
+  });
+  const logoutBtn = document.getElementById("btn-logout");
+  if(logoutBtn) logoutBtn.onclick = ()=>{ session=null; view="dashboard"; render(); };
+  const search = document.getElementById("sidebar-search");
+  if(search){
+    search.addEventListener("input", ()=>{ sidebarSearch = search.value; renderInPlaceSidebar(); });
+    search.focus();
+    const v=search.value; search.value=""; search.value=v;
+  }
 }
 
 /* ===================== INIT ===================== */
